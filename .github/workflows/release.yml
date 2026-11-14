@@ -1,0 +1,114 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的版本号（例如 v0.2.1）；留空则只构建产物不发布'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Make wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
+
+      - name: Resolve version from tag
+        id: ver
+        run: |
+          RAW="${{ github.event.inputs.tag || github.ref_name }}"
+          if [ -z "$RAW" ]; then RAW="v0.0.0-dev"; fi
+          NAME="${RAW#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$(echo "$NAME" | sed 's/[^0-9.].*$//')"
+          MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
+          CODE=$((MAJOR*10000 + MINOR*100 + PATCH))
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "code=$CODE" >> $GITHUB_OUTPUT
+          echo "version=$NAME ($CODE)" >> $GITHUB_OUTPUT
+
+      - name: Prepare signing keystore
+        env:
+          KS_B64: ${{ secrets.XBIGTV_KEYSTORE_BASE64 }}
+          KS_STORE_PASS: ${{ secrets.XBIGTV_STORE_PASSWORD }}
+          KS_KEY_ALIAS: ${{ secrets.XBIGTV_KEY_ALIAS }}
+          KS_KEY_PASS: ${{ secrets.XBIGTV_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::未配置签名密钥（secrets.XBIGTV_KEYSTORE_BASE64），本次产出为未签名 APK，不能覆盖安装到已安装设备。"
+            exit 0
+          fi
+          mkdir -p .ci
+          echo "$KS_B64" | base64 -d > .ci/release.jks
+          cat > keystore.properties <<EOF
+          storeFile=$PWD/.ci/release.jks
+          storePassword=$KS_STORE_PASS
+          keyAlias=$KS_KEY_ALIAS
+          keyPassword=$KS_KEY_PASS
+          EOF
+
+      - name: Build release APK
+        run: |
+          ./gradlew :app:assembleRelease --no-daemon --console=plain \
+            -PversionName=${{ steps.ver.outputs.name }} \
+            -PversionCode=${{ steps.ver.outputs.code }} \
+            -x lint -x lintVitalRelease
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk \
+             "out/X-BigTV-${{ steps.ver.outputs.name }}-armv7a.apk"
+          ls -l out
+          sha256sum out/*.apk > out/SHA256SUMS.txt
+
+      - name: Verify signature
+        run: |
+          BT=$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$BT/apksigner" verify --print-certs \
+            "out/X-BigTV-${{ steps.ver.outputs.name }}-armv7a.apk" || true
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: X-BigTV-${{ steps.ver.outputs.name }}
+          path: out/*
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: X 大屏 v${{ steps.ver.outputs.name }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            out/X-BigTV-${{ steps.ver.outputs.name }}-armv7a.apk
+            out/SHA256SUMS.txt
+          generate_release_notes: true
+          body: |
+            ## 安装 / 升级
+            - 直接下载下面的 `X-BigTV-*-armv7a.apk` 安装，覆盖安装即可保留登录态与设置。
+            - App 内「设置 → 检查更新」也会读取本 Release 自动升级。
+            - 适用于 armeabi-v7a 的 Android 电视盒子（minSdk 21）。
+
+            版本：`${{ steps.ver.outputs.version }}`

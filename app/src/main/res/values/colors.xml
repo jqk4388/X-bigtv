@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="x_black">#FF000000</color>
+    <color name="x_surface">#FF16181C</color>
+    <color name="x_surface_hi">#FF1F2126</color>
+    <color name="x_border">#FF2F3336</color>
+    <color name="x_text">#FFE7E9EA</color>
+    <color name="x_text_dim">#FF71767B</color>
+    <color name="x_blue">#FF1D9BF0</color>
+    <color name="x_red">#FFF91880</color>
+    <color name="x_green">#FF00BA7C</color>
+</resources>
