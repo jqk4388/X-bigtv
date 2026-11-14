@@ -266,6 +266,19 @@ public final class TimelineParser {
             }
         }
 
+        // X 网页端自带的 grok 翻译（和网页一致，不需要我们再调接口）
+        JSONObject grokTr = result.optJSONObject("grok_translated_post_with_availability");
+        if (grokTr != null) {
+            JSONObject trData = grokTr.optJSONObject("data");
+            if (trData != null) {
+                String tr = trData.optString("translation", "");
+                if (!tr.isEmpty()) {
+                    post.translation = unescape(tr);
+                    post.sourceLang = trData.optString("source_language", "");
+                }
+            }
+        }
+
         JSONObject ent = legacy.optJSONObject("extended_entities");
         if (ent == null) {
             ent = legacy.optJSONObject("entities");

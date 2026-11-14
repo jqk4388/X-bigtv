@@ -20,11 +20,11 @@ import java.util.concurrent.Executors;
 import io.github.xbigtv.tv.BuildConfig;
 import io.github.xbigtv.tv.data.Prefs;
 import io.github.xbigtv.tv.login.LoginActivity;
+import io.github.xbigtv.tv.update.UpdateManager;
 import io.github.xbigtv.tv.xapi.Ops;
 import io.github.xbigtv.tv.xapi.XSession;
-import io.github.xbigtv.tv.update.UpdateManager;
 
-/** 设置总入口：代理单列一个界面，其余播放/账号项都在这。 */
+/** 设置：按「网络 / 播放 / 账号 / 维护」分组呈现。 */
 public class SettingsActivity extends Activity {
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -48,7 +48,7 @@ public class SettingsActivity extends Activity {
         root.setBackgroundColor(Ui.BLACK);
 
         LinearLayout page = Ui.linear(this, LinearLayout.VERTICAL);
-        page.setPadding(Ui.dp(this, 40), Ui.dp(this, 24), Ui.dp(this, 40), Ui.dp(this, 20));
+        page.setPadding(Ui.dp(this, 40), Ui.dp(this, 22), Ui.dp(this, 40), Ui.dp(this, 18));
 
         LinearLayout head = Ui.linear(this, LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
@@ -57,44 +57,53 @@ public class SettingsActivity extends Activity {
         head.addView(flex, Ui.lp(0, 1, 1f));
         head.addView(action("返回", v -> finish()));
         page.addView(head);
-        page.addView(Ui.spacer(this, 14));
+        page.addView(Ui.spacer(this, 10));
 
         ScrollView scroll = new ScrollView(this);
         LinearLayout col = Ui.linear(this, LinearLayout.VERTICAL);
         scroll.addView(col);
 
+        // ---------------- 网络 ----------------
+        col.addView(section("网络"));
         proxyValue = Ui.text(this, "", 15, Ui.BLUE, true);
-        updateValue = Ui.text(this, "", 15, Ui.BLUE, true);
-        col.addView(row("检查更新", updateValue, v ->
-                UpdateManager.checkManually(this)));
-
         col.addView(row("代理设置（仅本 App）", proxyValue, v ->
                 startActivity(new Intent(this, ProxyActivity.class))));
 
+        // ---------------- 播放 ----------------
+        col.addView(section("播放"));
         qualityValue = Ui.text(this, "", 15, Ui.BLUE, true);
         col.addView(row("默认清晰度", qualityValue, v -> {
             Prefs.setQuality((Prefs.quality() + 1) % 5);
             syncValues();
         }));
-
         autoNextValue = Ui.text(this, "", 15, Ui.BLUE, true);
         col.addView(row("播完自动下一条", autoNextValue, v -> {
             Prefs.setAutoNext(!Prefs.autoNext());
             syncValues();
         }));
-
         fillValue = Ui.text(this, "", 15, Ui.BLUE, true);
-        col.addView(row("视频画面（铺满 / 适应）", fillValue, v -> {
+        col.addView(row("横屏画面（铺满 / 适应）", fillValue, v -> {
             Prefs.setFillScreen(!Prefs.fillScreen());
             syncValues();
         }));
+        TextView speedValue = Ui.text(this, "", 15, Ui.BLUE, true);
+        col.addView(row("默认倍速", speedValue, v -> {
+            float next = Math.round((Prefs.speed() + 0.1f) * 10f) / 10f;
+            if (next > 3.0f) {
+                next = 0.5f;
+            }
+            Prefs.setSpeed(next);
+            speedValue.setText(String.format(java.util.Locale.US, "%.1f×", next));
+        }));
+        speedValue.setText(String.format(java.util.Locale.US, "%.1f×", Prefs.speed()));
 
+        // ---------------- 账号 ----------------
+        col.addView(section("账号"));
         String account = XSession.screenName.isEmpty() ? "未登录"
                 : (XSession.displayName + " · @" + XSession.screenName);
         col.addView(row("当前账号", Ui.text(this, account, 15, Ui.TEXT_DIM, false), v ->
                 Ui.toast(this, "切换账号请用下面的「重新扫码登录」")));
-
-        col.addView(row("重新扫码登录", Ui.text(this, "手机扫码", 15, Ui.BLUE, true), v -> {
+        col.addView(row("重新扫码登录", Ui.text(this, "手机扫码/Cookie", 15, Ui.BLUE, true), v -> {
             XSession.clear();
             Intent it = new Intent(this, LoginActivity.class);
             it.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -102,8 +111,12 @@ public class SettingsActivity extends Activity {
             finish();
         }));
 
+        // ---------------- 维护 ----------------
+        col.addView(section("维护"));
+        updateValue = Ui.text(this, "", 15, Ui.BLUE, true);
+        col.addView(row("检查更新", updateValue, v -> UpdateManager.checkManually(this)));
         opsValue = Ui.text(this, "", 13, Ui.TEXT_DIM, false);
-        opsValue.setMaxLines(3);
+        opsValue.setMaxLines(2);
         col.addView(row("刷新接口版本（GraphQL queryId）", opsValue, v -> {
             opsValue.setText("刷新中…");
             io.execute(() -> {
@@ -121,11 +134,10 @@ public class SettingsActivity extends Activity {
         about.setBackground(Ui.round(Ui.SURFACE, Ui.dp(this, 12)));
         about.addView(Ui.text(this, "X 大屏  v" + BuildConfig.VERSION_NAME, 15, Ui.TEXT, true));
         String[] lines = {
-                "· 大屏端遥控器刷 X：上下移动看帖，OK 打开视频进入沉浸式短视频流。",
-                "· 视频播放基于 Media3/ExoPlayer，支持 HLS 自适应、倍速、清晰度、快进快退、续播。",
-                "· 手机扫码登录：手机上操作电视画面完成官方登录，Cookie 保存在本机。",
-                "· 代理只作用于本 App，接口 / 图片 / 视频 / 登录页统一走代理。",
-                "· 仅供个人在大屏上浏览使用。"
+                "· 遥控器上下看帖，OK 打开视频进入沉浸式竖屏视频流，长按 OK 刷新回到顶部。",
+                "· 播放器支持 HLS 自适应、倍速（面板内 ▲▼ 0.1 步进）、清晰度、续播、竖屏旋转。",
+                "· 代理只作用于本 App：接口 / 图片 / 视频 / 登录页统一走代理。",
+                "· 开源地址：github.com/jqk4388/X-bigtv"
         };
         for (String l : lines) {
             TextView tv = Ui.text(this, l, 13, Ui.TEXT_DIM, false);
@@ -139,6 +151,15 @@ public class SettingsActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         syncValues();
+        updateValue.setText("当前 " + UpdateManager.currentVersionLine());
+    }
+
+    private View section(String title) {
+        LinearLayout box = Ui.linear(this, LinearLayout.VERTICAL);
+        TextView tv = Ui.text(this, title, 13, Ui.TEXT_DIM, true);
+        box.setPadding(Ui.dp(this, 4), Ui.dp(this, 14), 0, Ui.dp(this, 6));
+        box.addView(tv);
+        return box;
     }
 
     private void syncValues() {
@@ -167,9 +188,6 @@ public class SettingsActivity extends Activity {
         qualityValue.setText(q);
         autoNextValue.setText(Prefs.autoNext() ? "开" : "关");
         fillValue.setText(Prefs.fillScreen() ? "铺满" : "适应");
-        if (updateValue != null) {
-            updateValue.setText("当前 " + UpdateManager.currentVersionLine());
-        }
         if (opsValue != null && opsValue.getText().length() == 0) {
             opsValue.setText(Ops.describe());
         }

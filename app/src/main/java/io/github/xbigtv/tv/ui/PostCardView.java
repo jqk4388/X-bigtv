@@ -3,7 +3,6 @@ package io.github.xbigtv.tv.ui;
 import android.content.Context;
 import android.graphics.Outline;
 import android.text.TextUtils;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewOutlineProvider;
@@ -12,19 +11,23 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.util.List;
+
 import io.github.xbigtv.tv.xapi.MediaItem;
 import io.github.xbigtv.tv.xapi.Post;
 
-/** 时间线里的一张帖子卡片：可聚焦、可点击，遥控器上下移动焦点。 */
+/** 时间线里的一张帖子卡片：可聚焦、可点击，遥控器上下移动焦点，长按 OK 刷新。 */
 public class PostCardView extends LinearLayout {
 
     public interface Listener {
         void onOpen(Post post);
+
+        void onLongPress(Post post);
     }
 
     private final Context c;
     private Post post;
-    private Listener listener;
+    private final Listener listener;
 
     public PostCardView(Context context, Listener listener) {
         super(context);
@@ -41,6 +44,13 @@ public class PostCardView extends LinearLayout {
             if (post != null && listener != null) {
                 listener.onOpen(post);
             }
+        });
+        setOnLongClickListener(v -> {
+            if (post != null && listener != null) {
+                listener.onLongPress(post);
+                return true;
+            }
+            return false;
         });
         setOnFocusChangeListener((v, has) -> {
             v.setBackground(has
@@ -64,14 +74,13 @@ public class PostCardView extends LinearLayout {
             addView(Ui.spacer(c, 6));
         }
 
-        // 头部：头像 + 昵称 + @handle · 时间
+        // 头部
         LinearLayout head = Ui.linear(c, HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
 
         ImageView avatar = new ImageView(c);
         int av = Ui.dp(c, 44);
-        LinearLayout.LayoutParams avLp = Ui.lp(av, av);
-        avatar.setLayoutParams(avLp);
+        avatar.setLayoutParams(Ui.lp(av, av));
         avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
         avatar.setBackground(Ui.round(0xFF2A2E33, av / 2f));
         avatar.setClipToOutline(true);
@@ -118,17 +127,33 @@ public class PostCardView extends LinearLayout {
             body.setMaxLines(9);
             body.setEllipsize(TextUtils.TruncateAt.END);
             addView(body);
-            addView(Ui.spacer(c, 10));
+            addView(Ui.spacer(c, 6));
+        }
+
+        // X 原生翻译
+        if (p.hasTranslation()) {
+            LinearLayout tr = Ui.linear(c, VERTICAL);
+            tr.setPadding(Ui.dp(c, 1), Ui.dp(c, 2), Ui.dp(c, 1), Ui.dp(c, 2));
+            TextView tag = Ui.text(c, "翻译自 " + langName(p.sourceLang) + " · Grok", 12, Ui.BLUE, true);
+            tr.addView(tag);
+            TextView body = Ui.text(c, p.translation, 15, 0xFFC7CBD1, false);
+            body.setLineSpacing(Ui.dp(c, 2), 1f);
+            body.setMaxLines(8);
+            body.setEllipsize(TextUtils.TruncateAt.END);
+            body.setPadding(0, Ui.dp(c, 3), 0, 0);
+            tr.addView(body);
+            addView(tr);
+            addView(Ui.spacer(c, 6));
         }
 
         // 媒体
         MediaItem video = p.firstVideo();
-        MediaItem photo = p.firstPhoto();
+        List<MediaItem> photos = p.photos();
         if (video != null) {
             addView(mediaFrame(video, true, p));
             addView(Ui.spacer(c, 10));
-        } else if (photo != null) {
-            addView(mediaFrame(photo, false, p));
+        } else if (!photos.isEmpty()) {
+            addView(photoStrip(photos));
             addView(Ui.spacer(c, 10));
         }
 
@@ -179,6 +204,99 @@ public class PostCardView extends LinearLayout {
         return row;
     }
 
+    static String langName(String code) {
+        if (code == null) {
+            return "外语";
+        }
+        switch (code) {
+            case "ja":
+                return "日语";
+            case "en":
+                return "英语";
+            case "ko":
+                return "韩语";
+            case "fr":
+                return "法语";
+            case "de":
+                return "德语";
+            case "es":
+                return "西班牙语";
+            case "ru":
+                return "俄语";
+            case "ar":
+                return "阿拉伯语";
+            case "pt":
+                return "葡萄牙语";
+            default:
+                return TextUtils.isEmpty(code) ? "外语" : code;
+        }
+    }
+
+    /** 多图：一行等宽缩略图（最多 4 张，多出来的用 +N 角标提示）。 */
+    private View photoStrip(List<MediaItem> photos) {
+        int count = photos.size();
+        int shown = Math.min(count, 4);
+        LinearLayout row = Ui.linear(c, HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        int height = Ui.dp(c, count == 1 ? 300 : 180);
+        for (int i = 0; i < shown; i++) {
+            MediaItem m = photos.get(i);
+            FrameLayout cell = new FrameLayout(c);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, height, 1f);
+            if (i > 0) {
+                lp.leftMargin = Ui.dp(c, 6);
+            }
+            cell.setLayoutParams(lp);
+            cell.setBackground(Ui.round(0xFF0C0E11, Ui.dp(c, 10)));
+            cell.setClipToOutline(true);
+            cell.setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View view, Outline outline) {
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), Ui.dp(c, 10));
+                }
+            });
+
+            ImageView iv = new ImageView(c);
+            iv.setLayoutParams(new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            ImageLoader.get().load(thumb(m, 640), iv, Ui.dp(c, 400));
+            cell.addView(iv);
+
+            if (i == shown - 1 && count > shown) {
+                TextView more = Ui.text(c, "+" + (count - shown), 18, 0xFFFFFFFF, true);
+                more.setGravity(Gravity.CENTER);
+                final FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(
+                        LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
+                more.setLayoutParams(mlp);
+                more.setBackground(Ui.round(0x99000000, 0));
+                cell.addView(more);
+            }
+            if (count > 1) {
+                TextView idx = Ui.pill(c, (i + 1) + "/" + count);
+                FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(
+                        LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
+                ilp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
+                ilp.rightMargin = Ui.dp(c, 6);
+                ilp.bottomMargin = Ui.dp(c, 6);
+                idx.setLayoutParams(ilp);
+                cell.addView(idx);
+            }
+            row.addView(cell);
+        }
+        return row;
+    }
+
+    static String thumb(MediaItem m, int width) {
+        String url = m.thumbUrl;
+        if (TextUtils.isEmpty(url)) {
+            return url;
+        }
+        if (url.contains("pbs.twimg.com/media/")) {
+            return url + (url.contains("?") ? "&" : "?") + "name=" + (width >= 1000 ? "large" : "small");
+        }
+        return url;
+    }
+
     private View mediaFrame(MediaItem m, boolean isVideo, Post p) {
         int maxW = Ui.dp(c, 620);
         int maxH = Ui.dp(c, 340);
@@ -189,8 +307,7 @@ public class PostCardView extends LinearLayout {
         int fh = Math.max(Ui.dp(c, 80), Math.round(h * scale));
 
         FrameLayout frame = new FrameLayout(c);
-        LinearLayout.LayoutParams flp = Ui.lp(fw, fh);
-        frame.setLayoutParams(flp);
+        frame.setLayoutParams(Ui.lp(fw, fh));
         frame.setBackground(Ui.round(0xFF0C0E11, Ui.dp(c, 10)));
         frame.setClipToOutline(true);
         frame.setOutlineProvider(new ViewOutlineProvider() {
@@ -225,25 +342,6 @@ public class PostCardView extends LinearLayout {
                 dur.setLayoutParams(dlp);
                 frame.addView(dur);
             }
-            if (p.media.size() > 1) {
-                TextView cnt = Ui.pill(c, p.media.size() + " 个视频");
-                FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(
-                        LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
-                clp.gravity = Gravity.TOP | Gravity.LEFT;
-                clp.leftMargin = Ui.dp(c, 8);
-                clp.topMargin = Ui.dp(c, 8);
-                cnt.setLayoutParams(clp);
-                frame.addView(cnt);
-            }
-        } else if (p.media.size() > 1) {
-            TextView cnt = Ui.pill(c, "1/" + p.media.size());
-            FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(
-                    LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
-            clp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
-            clp.rightMargin = Ui.dp(c, 8);
-            clp.bottomMargin = Ui.dp(c, 8);
-            cnt.setLayoutParams(clp);
-            frame.addView(cnt);
         }
         return frame;
     }

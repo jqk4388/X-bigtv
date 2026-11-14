@@ -6,7 +6,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -25,14 +24,15 @@ import java.util.concurrent.Executors;
 
 import io.github.xbigtv.tv.data.Prefs;
 import io.github.xbigtv.tv.login.LoginActivity;
+import io.github.xbigtv.tv.update.UpdateManager;
+import io.github.xbigtv.tv.xapi.MediaItem;
 import io.github.xbigtv.tv.xapi.Ops;
 import io.github.xbigtv.tv.xapi.Post;
 import io.github.xbigtv.tv.xapi.TimelinePage;
 import io.github.xbigtv.tv.xapi.XApi;
 import io.github.xbigtv.tv.xapi.XSession;
-import io.github.xbigtv.tv.update.UpdateManager;
 
-/** 主界面：遥控器上下看帖，OK 打开视频帖进入沉浸视频流。 */
+/** 主界面：遥控器上下看帖，OK 打开视频/图片，长按 OK 刷新回到顶部。 */
 public class MainActivity extends Activity implements PostAdapter.Listener {
 
     private static final int MODE_FOR_YOU = 0;
@@ -54,6 +54,7 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
     private boolean loading;
     private boolean exhausted;
     private long lastFocusRequest;
+    private long lastLongPressAt;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -100,7 +101,7 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
         header.addView(logo);
 
         View logoGap = new View(this);
-        logoGap.setLayoutParams(Ui.lp(Ui.dp(this, 26), 1));
+        logoGap.setLayoutParams(Ui.lp(Ui.dp(this, 22), 1));
         header.addView(logoGap);
 
         tabBar = Ui.linear(this, LinearLayout.HORIZONTAL);
@@ -110,7 +111,7 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
             final int idx = i;
             LinearLayout item = Ui.linear(this, LinearLayout.VERTICAL);
             item.setGravity(Gravity.CENTER_HORIZONTAL);
-            item.setPadding(Ui.dp(this, 16), Ui.dp(this, 6), Ui.dp(this, 16), Ui.dp(this, 4));
+            item.setPadding(Ui.dp(this, 14), Ui.dp(this, 6), Ui.dp(this, 14), Ui.dp(this, 4));
             item.setFocusable(true);
             item.setFocusableInTouchMode(false);
 
@@ -141,7 +142,7 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
         header.addView(topButton("代理", v -> startActivity(new Intent(this, ProxyActivity.class))));
         header.addView(topButton("设置", v -> startActivity(new Intent(this, SettingsActivity.class))));
 
-        String who = XSession.screenName.isEmpty() ? "账号" : "@" + Prefs.screenName();
+        String who = XSession.screenName.isEmpty() ? "账号" : "@" + XSession.screenName;
         TextView account = Ui.text(this, who, 14, Ui.TEXT_DIM, true);
         account.setPadding(Ui.dp(this, 12), Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 8));
         header.addView(account);
@@ -193,7 +194,8 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
             ((TextView) v).setTextColor(has ? Ui.BLACK : Ui.TEXT_DIM);
             v.setBackground(has ? Ui.round(Ui.TEXT, Ui.dp(this, 18)) : null);
         });
-        LinearLayout.LayoutParams lp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams lp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = Ui.dp(this, 6);
         tv.setLayoutParams(lp);
         return tv;
@@ -246,35 +248,23 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
                 } else {
                     page = XApi.videoFeed(null, useCursor);
                 }
-                if (page.error.contains("404") && Ops.refresh() >= 0) {
-                    // 接口 ID 过期：刷新后自动重试一次
-                    if (useMode == MODE_FOR_YOU) {
-                        page = XApi.home(false, useCursor);
-                    } else if (useMode == MODE_FOLLOWING) {
-                        page = XApi.home(true, useCursor);
-                    } else {
-                        page = XApi.videoFeed(null, useCursor);
-                    }
+                if (page.error.contains("404")) {
+                    Ops.refresh();
+                    page = useMode == MODE_VIDEO ? XApi.videoFeed(null, useCursor)
+                            : XApi.home(useMode == MODE_FOLLOWING, useCursor);
                 }
             } catch (Throwable t) {
                 boolean stale = t.getMessage() != null && t.getMessage().contains("404");
+                page = new TimelinePage();
+                page.error = t.getMessage() == null ? "网络请求失败" : t.getMessage();
                 if (stale) {
                     try {
                         Ops.refresh();
-                        if (useMode == MODE_FOR_YOU) {
-                            page = XApi.home(false, useCursor);
-                        } else if (useMode == MODE_FOLLOWING) {
-                            page = XApi.home(true, useCursor);
-                        } else {
-                            page = XApi.videoFeed(null, useCursor);
-                        }
+                        page = useMode == MODE_VIDEO ? XApi.videoFeed(null, useCursor)
+                                : XApi.home(useMode == MODE_FOLLOWING, useCursor);
                     } catch (Throwable t2) {
-                        page = new TimelinePage();
                         page.error = t2.getMessage() == null ? "网络请求失败" : t2.getMessage();
                     }
-                } else {
-                    page = new TimelinePage();
-                    page.error = t.getMessage() == null ? "网络请求失败" : t.getMessage();
                 }
             }
             final TimelinePage result = page;
@@ -364,9 +354,37 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
                 index = 0;
             }
             VideoFeedActivity.start(this, feed, index, null);
-        } else {
-            DetailActivity.start(this, post.id);
+            return;
         }
+        List<MediaItem> photos = post.photos();
+        if (!photos.isEmpty()) {
+            List<String> urls = new ArrayList<>();
+            for (MediaItem m : photos) {
+                urls.add(PostCardView.thumb(m, 1600));
+            }
+            ImageViewerActivity.start(this, urls, 0);
+            return;
+        }
+        DetailActivity.start(this, post.id);
+    }
+
+    /** 长按 OK：刷新并回到最上面（抖音式刷新手势）。 */
+    @Override
+    public void onLongPress(Post post) {
+        long now = System.currentTimeMillis();
+        if (now - lastLongPressAt < 1200) {
+            return;
+        }
+        lastLongPressAt = now;
+        Ui.toast(this, "刷新中…");
+        rv.scrollToPosition(0);
+        load(true);
+        main.postDelayed(() -> {
+            if (adapter.getItemCount() > 0) {
+                rv.smoothScrollToPosition(0);
+                focusFirst();
+            }
+        }, 600);
     }
 
     @Override

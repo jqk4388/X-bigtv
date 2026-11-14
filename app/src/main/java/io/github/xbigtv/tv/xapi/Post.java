@@ -22,6 +22,10 @@ public final class Post {
     public boolean sensitive;
     public boolean liked;
 
+    /** X 网页端自带的翻译（grok 翻译），有值时直接展示，和网页版一致。 */
+    public String translation = "";
+    public String sourceLang = "";
+
     public final List<MediaItem> media = new ArrayList<>();
 
     /** 引用帖（可选） */
@@ -55,6 +59,21 @@ public final class Post {
             }
         }
         return null;
+    }
+
+    /** 所有图片（按顺序），用于多图九宫格与全屏翻页。 */
+    public List<MediaItem> photos() {
+        List<MediaItem> out = new ArrayList<>();
+        for (MediaItem m : media) {
+            if (m.type == MediaItem.TYPE_PHOTO) {
+                out.add(m);
+            }
+        }
+        return out;
+    }
+
+    public boolean hasTranslation() {
+        return translation != null && translation.trim().length() > 0;
     }
 
     public String timeAgo() {

@@ -16,6 +16,8 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.VH> {
     public interface Listener {
         void onOpen(Post post);
 
+        void onLongPress(Post post);
+
         void onNeedMore();
     }
 
@@ -50,7 +52,17 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.VH> {
     @NonNull
     @Override
     public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        PostCardView card = new PostCardView(parent.getContext(), p -> listener.onOpen(p));
+        PostCardView card = new PostCardView(parent.getContext(), new PostCardView.Listener() {
+            @Override
+            public void onOpen(Post post) {
+                listener.onOpen(post);
+            }
+
+            @Override
+            public void onLongPress(Post post) {
+                listener.onLongPress(post);
+            }
+        });
         RecyclerView.LayoutParams lp = new RecyclerView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.leftMargin = Ui.dp(parent.getContext(), 20);

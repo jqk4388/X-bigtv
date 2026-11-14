@@ -236,6 +236,11 @@ public class SearchActivity extends Activity implements PostAdapter.Listener {
     }
 
     @Override
+    public void onLongPress(Post post) {
+        // 详情/搜索页长按不做刷新，避免误触
+    }
+
+    @Override
     public void onNeedMore() {
         if (!loading && !exhausted) {
             load(false);

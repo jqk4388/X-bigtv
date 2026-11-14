@@ -3,12 +3,10 @@ package io.github.xbigtv.tv.ui;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Bitmap;
-import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -22,8 +20,8 @@ import android.widget.TextView;
 
 import androidx.annotation.OptIn;
 import androidx.media3.common.PlaybackException;
-import androidx.media3.common.Player;
 import androidx.media3.common.PlaybackParameters;
+import androidx.media3.common.Player;
 import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.okhttp.OkHttpDataSource;
@@ -33,7 +31,9 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.AspectRatioFrameLayout;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -41,17 +41,21 @@ import io.github.xbigtv.tv.data.Prefs;
 import io.github.xbigtv.tv.net.Http;
 import io.github.xbigtv.tv.xapi.MediaItem;
 import io.github.xbigtv.tv.xapi.Post;
+import io.github.xbigtv.tv.xapi.TimelinePage;
 import io.github.xbigtv.tv.xapi.XApi;
 
 /**
- * 抖音式上下翻页视频流：遥控器上/下切换视频，OK 播放暂停，左右快进快退，
- * 菜单键呼出「倍速 / 清晰度 / 画面比例 / 连播 / 静音 / 点赞」面板。
+ * 抖音式上下翻页视频流：
+ * 上下切换视频、OK 播放暂停、左右快退快进、菜单呼出控制面板，
+ * 播放 10 秒后自动隐藏作者信息进入沉浸模式，任意按键重新唤出。
  */
 @OptIn(markerClass = UnstableApi.class)
 public class VideoFeedActivity extends Activity {
 
     private static List<Post> sFeed = new ArrayList<>();
     private static int sIndex = 0;
+
+    private static final long IMMERSIVE_DELAY_MS = 10_000L;
 
     public static void start(Activity from, List<Post> feed, int index, String source) {
         if (feed == null || feed.isEmpty()) {
@@ -74,27 +78,37 @@ public class VideoFeedActivity extends Activity {
     private FrameLayout stage;
     private ImageView transition;
 
+    private LinearLayout infoPanel;
+    private LinearLayout topBar;
     private TextView idxText;
+    private TextView hintText;
     private TextView authorText;
     private TextView bodyText;
     private TextView statText;
     private TextView timeText;
-    private TextView hintText;
     private TextView pauseGlyph;
     private TextView errorText;
     private ProgressBar spinner;
     private ProgressBarLine progressLine;
-
     private LinearLayout panel;
+    private TextView speedChip;
+    private TextView rotateChip;
 
     private int index;
     private boolean prepared;
     private boolean panelOpen;
-    private boolean userPaused;
     private boolean loadingMore;
+    private boolean rotated;
+    private boolean resumedOnce;
     private String feedCursor = "";
 
-    private final Runnable hideHud = () -> setHudVisible(false);
+    private final Runnable hideImmersive = () -> applyChrome(false);
+    private final Runnable hideHud = () -> {
+        idxText.setVisibility(View.INVISIBLE);
+        hintText.setVisibility(View.INVISIBLE);
+        timeText.setVisibility(View.INVISIBLE);
+        progressLine.setVisibility(View.INVISIBLE);
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -108,7 +122,7 @@ public class VideoFeedActivity extends Activity {
         createPlayer();
         ViewParentHost.sInstance = new ViewParentHost();
         playIndex(index, 0);
-        showHud();
+        showImmersive();
         main.post(ticker);
     }
 
@@ -125,44 +139,42 @@ public class VideoFeedActivity extends Activity {
         // 用 TextureView 而不是 SurfaceView：本机（4K 盒子）上 SurfaceView 会被父容器的
         // 背景层盖住，表现为"有声音、画面全黑"。
         aspect = new AspectRatioFrameLayout(this);
-        aspect.setResizeMode(Prefs.fillScreen()
-                ? AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                : AspectRatioFrameLayout.RESIZE_MODE_FIT);
+        aspect.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
         textureView = new android.view.TextureView(this);
         aspect.addView(textureView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        stage.addView(aspect, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams alp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        alp.gravity = Gravity.CENTER;
+        stage.addView(aspect, alp);
 
-        // 切换用缩略图层
         transition = new ImageView(this);
         transition.setScaleType(ImageView.ScaleType.CENTER_CROP);
         transition.setVisibility(View.GONE);
         root.addView(transition, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // 顶部信息
-        LinearLayout top = Ui.linear(this, LinearLayout.HORIZONTAL);
-        top.setGravity(Gravity.CENTER_VERTICAL);
-        top.setPadding(Ui.dp(this, 28), Ui.dp(this, 18), Ui.dp(this, 28), Ui.dp(this, 18));
+        // 顶部信息条
+        topBar = Ui.linear(this, LinearLayout.HORIZONTAL);
+        topBar.setGravity(Gravity.CENTER_VERTICAL);
+        topBar.setPadding(Ui.dp(this, 28), Ui.dp(this, 16), Ui.dp(this, 28), Ui.dp(this, 16));
         idxText = Ui.text(this, "", 18, Ui.TEXT, true);
-        top.addView(idxText);
+        topBar.addView(idxText);
         View gap = new View(this);
         gap.setLayoutParams(Ui.lp(Ui.dp(this, 16), 1));
-        top.addView(gap);
+        topBar.addView(gap);
         hintText = Ui.text(this, "▲▼ 切换视频   OK 播放/暂停   ◀▶ 快退/快进   菜单 更多   返回 退出",
-                13, uiDim(), false);
-        top.addView(hintText);
+                13, 0xCCD0D4D8, false);
+        topBar.addView(hintText);
         FrameLayout.LayoutParams tlp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         tlp.gravity = Gravity.TOP;
-        root.addView(top, tlp);
-        top.setBackground(Ui.round(0x66000000, 0));
+        root.addView(topBar, tlp);
 
-        // 左侧文案
-        LinearLayout info = Ui.linear(this, LinearLayout.VERTICAL);
-        info.setPadding(Ui.dp(this, 12), Ui.dp(this, 12), Ui.dp(this, 12), Ui.dp(this, 12));
-        info.setBackground(Ui.round(0x77000000, Ui.dp(this, 14)));
+        // 左侧作者信息
+        infoPanel = Ui.linear(this, LinearLayout.VERTICAL);
+        infoPanel.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 12));
+        infoPanel.setBackground(Ui.round(0x88000000, Ui.dp(this, 14)));
 
         LinearLayout authorRow = Ui.linear(this, LinearLayout.HORIZONTAL);
         authorRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -181,35 +193,37 @@ public class VideoFeedActivity extends Activity {
         avatar.setTag("avatar");
         authorRow.addView(avatar);
         authorText = Ui.text(this, "", 18, Ui.TEXT, true);
-        LinearLayout.LayoutParams alp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        alp.leftMargin = Ui.dp(this, 10);
-        authorText.setLayoutParams(alp);
+        LinearLayout.LayoutParams alpp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        alpp.leftMargin = Ui.dp(this, 10);
+        authorText.setLayoutParams(alpp);
         authorRow.addView(authorText);
-        info.addView(authorRow);
+        infoPanel.addView(authorRow);
 
         bodyText = Ui.text(this, "", 16, Ui.TEXT, false);
         bodyText.setMaxLines(4);
         bodyText.setEllipsize(TextUtils.TruncateAt.END);
         bodyText.setLineSpacing(Ui.dp(this, 3), 1f);
-        LinearLayout.LayoutParams blp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams blp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
         blp.topMargin = Ui.dp(this, 8);
         bodyText.setLayoutParams(blp);
-        info.addView(bodyText);
+        infoPanel.addView(bodyText);
 
-        statText = Ui.text(this, "", 14, uiDim(), false);
-        LinearLayout.LayoutParams slp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        slp.topMargin = Ui.dp(this, 8);
-        statText.setLayoutParams(slp);
-        info.addView(statText);
+        statText = Ui.text(this, "", 14, 0xCCD0D4D8, false);
+        LinearLayout.LayoutParams slpp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        slpp.topMargin = Ui.dp(this, 8);
+        statText.setLayoutParams(slpp);
+        infoPanel.addView(statText);
 
         FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(Ui.dp(this, 640),
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         ilp.gravity = Gravity.BOTTOM | Gravity.LEFT;
         ilp.leftMargin = Ui.dp(this, 36);
         ilp.bottomMargin = Ui.dp(this, 46);
-        root.addView(info, ilp);
+        root.addView(infoPanel, ilp);
 
-        // 暂停大图标
         pauseGlyph = Ui.text(this, "❚❚", 46, 0xCCFFFFFF, true);
         pauseGlyph.setVisibility(View.GONE);
         FrameLayout.LayoutParams pgp = new FrameLayout.LayoutParams(
@@ -217,9 +231,7 @@ public class VideoFeedActivity extends Activity {
         pgp.gravity = Gravity.CENTER;
         root.addView(pauseGlyph, pgp);
 
-        // 加载圈
         spinner = new ProgressBar(this);
-        spinner.setIndeterminate(true);
         FrameLayout.LayoutParams splp = new FrameLayout.LayoutParams(Ui.dp(this, 52), Ui.dp(this, 52));
         splp.gravity = Gravity.CENTER;
         root.addView(spinner, splp);
@@ -232,7 +244,6 @@ public class VideoFeedActivity extends Activity {
         elp.gravity = Gravity.CENTER;
         root.addView(errorText, elp);
 
-        // 底部进度条
         progressLine = new ProgressBarLine(this);
         FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 24));
@@ -247,7 +258,6 @@ public class VideoFeedActivity extends Activity {
         ttlp.bottomMargin = Ui.dp(this, 18);
         root.addView(timeText, ttlp);
 
-        // 控制面板
         panel = Ui.linear(this, LinearLayout.HORIZONTAL);
         panel.setGravity(Gravity.CENTER);
         panel.setVisibility(View.GONE);
@@ -260,10 +270,6 @@ public class VideoFeedActivity extends Activity {
         root.addView(panel, pllp);
 
         setContentView(root);
-    }
-
-    private int uiDim() {
-        return 0xCCD0D4D8;
     }
 
     /* ---------------- 播放器 ---------------- */
@@ -299,7 +305,7 @@ public class VideoFeedActivity extends Activity {
                 if (state == Player.STATE_READY) {
                     prepared = true;
                     errorText.setVisibility(View.GONE);
-                    restoreResume();
+                    restoreResumeOnce();
                 }
                 if (state == Player.STATE_ENDED) {
                     onEnded();
@@ -343,7 +349,11 @@ public class VideoFeedActivity extends Activity {
 
     private void playIndex(int newIndex, int direction) {
         if (newIndex < 0 || newIndex >= sFeed.size()) {
-            Ui.toast(this, direction > 0 ? "已经是最后一条" : "已经是第一条");
+            if (direction > 0) {
+                loadMoreThen(newIndex, direction);
+            } else {
+                Ui.toast(this, "已经是第一条");
+            }
             return;
         }
         saveResume();
@@ -355,10 +365,12 @@ public class VideoFeedActivity extends Activity {
             return;
         }
         prepared = false;
-        userPaused = false;
+        resumedOnce = false;
+        rotated = false;
         errorText.setVisibility(View.GONE);
         spinner.setVisibility(View.VISIBLE);
         bindOverlay(post, media);
+        applyVideoLayout(media);
         animateSwitch(post, direction);
 
         String url = chooseUrl(media);
@@ -371,7 +383,37 @@ public class VideoFeedActivity extends Activity {
         player.setMediaItem(androidx.media3.common.MediaItem.fromUri(url));
         player.prepare();
         player.setPlayWhenReady(true);
-        showHud();
+        // 倍速跨视频保留
+        player.setPlaybackParameters(new PlaybackParameters(Prefs.speed()));
+        showImmersive();
+    }
+
+    /** 竖屏视频居中不拉伸；横屏按设置铺满/适应。 */
+    private void applyVideoLayout(MediaItem media) {
+        boolean portrait = media.height > media.width;
+        int sw = Ui.screenW(this);
+        int sh = Ui.screenH(this);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(sw, sh);
+        lp.gravity = Gravity.CENTER;
+        if (rotated) {
+            lp = new FrameLayout.LayoutParams(sh, sw);
+            lp.gravity = Gravity.CENTER;
+            aspect.setRotation(90f);
+            aspect.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_ZOOM);
+        } else {
+            aspect.setRotation(0f);
+            if (portrait) {
+                aspect.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
+            } else {
+                aspect.setResizeMode(Prefs.fillScreen()
+                        ? AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        : AspectRatioFrameLayout.RESIZE_MODE_FIT);
+            }
+        }
+        aspect.setLayoutParams(lp);
+        if (rotateChip != null) {
+            rotateChip.setVisibility(portrait ? View.VISIBLE : View.GONE);
+        }
     }
 
     private String chooseUrl(MediaItem media) {
@@ -418,8 +460,12 @@ public class VideoFeedActivity extends Activity {
     private void bindOverlay(Post post, MediaItem media) {
         idxText.setText((index + 1) + " / " + sFeed.size());
         authorText.setText(post.authorName + "   @" + post.handle + "  ·  " + post.timeAgo());
-        bodyText.setText(post.text);
-        bodyText.setVisibility(TextUtils.isEmpty(post.text) ? View.GONE : View.VISIBLE);
+        String text = post.text;
+        if (post.hasTranslation()) {
+            text = text + "\n\n【Grok 翻译】" + post.translation;
+        }
+        bodyText.setText(text);
+        bodyText.setVisibility(TextUtils.isEmpty(text) ? View.GONE : View.VISIBLE);
         StringBuilder sb = new StringBuilder();
         sb.append("♥ ").append(Post.count(post.likes))
                 .append("    ⇄ ").append(Post.count(post.retweets))
@@ -430,8 +476,7 @@ public class VideoFeedActivity extends Activity {
         }
         statText.setText(sb.toString());
 
-        View info = (View) authorText.getParent().getParent();
-        View avatar = info.findViewWithTag("avatar");
+        View avatar = infoPanel.findViewWithTag("avatar");
         if (avatar instanceof ImageView && !TextUtils.isEmpty(post.avatarUrl)) {
             ImageLoader.get().load(post.avatarUrl, (ImageView) avatar, Ui.dp(this, 40));
         }
@@ -443,19 +488,27 @@ public class VideoFeedActivity extends Activity {
         }
         long dur = player.getDuration();
         long pos = player.getCurrentPosition();
-        if (dur > 60000 && pos > 3000 && dur - pos > 5000) {
+        if (dur > 60000 && pos > 5000 && dur - pos > 5000) {
             Prefs.saveResume(sFeed.get(index).id, pos);
         } else {
             Prefs.saveResume(sFeed.get(index).id, 0L);
         }
     }
 
-    private void restoreResume() {
+    /** 只续播一次，避免 STATE_READY 反复触发导致来回 seek 卡死。 */
+    private void restoreResumeOnce() {
+        if (resumedOnce || index >= sFeed.size()) {
+            return;
+        }
+        resumedOnce = true;
         long saved = Prefs.resumeOf(sFeed.get(index).id);
-        if (saved > 3000 && saved < player.getDuration() - 3000) {
+        long dur = player.getDuration();
+        if (saved > 5000 && dur > 0 && saved < dur - 3000) {
             player.seekTo(saved);
             Ui.toast(this, "从上次位置继续播放");
         }
+        // 清掉旧进度，防止下次进入又跳回去
+        Prefs.saveResume(sFeed.get(index).id, 0L);
     }
 
     private void onEnded() {
@@ -483,16 +536,16 @@ public class VideoFeedActivity extends Activity {
         loadingMore = true;
         Ui.toast(this, "正在加载更多视频…");
         io.execute(() -> {
-            io.github.xbigtv.tv.xapi.TimelinePage page = null;
+            TimelinePage page = null;
             try {
                 page = XApi.videoFeed(null, feedCursor);
             } catch (Throwable ignored) {
             }
-            final io.github.xbigtv.tv.xapi.TimelinePage result = page;
+            final TimelinePage result = page;
             main.post(() -> {
                 loadingMore = false;
                 if (result != null && !result.posts.isEmpty()) {
-                    java.util.HashSet<String> known = new java.util.HashSet<>();
+                    HashSet<String> known = new HashSet<>();
                     for (Post p : sFeed) {
                         known.add(p.id);
                     }
@@ -523,16 +576,51 @@ public class VideoFeedActivity extends Activity {
         panel.removeAllViews();
         panelOpen = true;
         panel.setVisibility(View.VISIBLE);
+        showImmersive();
 
-        panel.addView(panelChip("倍速 " + speedLabel(), v -> cycleSpeed()));
+        speedChip = panelChip(speedLabel(), v -> closePanel());
+        speedChip.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) {
+                return false;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                adjustSpeed(0.1f);
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                adjustSpeed(-0.1f);
+                return true;
+            }
+            return false;
+        });
+        panel.addView(speedChip);
+
         panel.addView(panelChip("清晰度 " + qualityLabel(), v -> cycleQuality()));
         panel.addView(panelChip(Prefs.fillScreen() ? "画面 铺满" : "画面 适应", v -> {
             Prefs.setFillScreen(!Prefs.fillScreen());
-            aspect.setResizeMode(Prefs.fillScreen()
-                    ? AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    : AspectRatioFrameLayout.RESIZE_MODE_FIT);
+            Post cur = sFeed.get(index);
+            MediaItem m = cur.firstVideo();
+            if (m != null) {
+                rotated = false;
+                applyVideoLayout(m);
+            }
             closePanel();
         }));
+
+        rotateChip = panelChip("旋转 90°", v -> {
+            rotated = !rotated;
+            Post cur = sFeed.get(index);
+            MediaItem m = cur.firstVideo();
+            if (m != null) {
+                applyVideoLayout(m);
+            }
+            closePanel();
+        });
+        MediaItem curMedia = sFeed.get(index).firstVideo();
+        rotateChip.setVisibility(curMedia != null && curMedia.height > curMedia.width
+                ? View.VISIBLE : View.GONE);
+        panel.addView(rotateChip);
+
         panel.addView(panelChip(Prefs.autoNext() ? "连播 开" : "连播 关", v -> {
             Prefs.setAutoNext(!Prefs.autoNext());
             closePanel();
@@ -555,10 +643,10 @@ public class VideoFeedActivity extends Activity {
                 panel.getChildAt(0).requestFocus();
             }
         });
-        main.removeCallbacks(hideHud);
+        main.removeCallbacks(hideImmersive);
     }
 
-    private View panelChip(String label, View.OnClickListener onClick) {
+    private TextView panelChip(String label, View.OnClickListener onClick) {
         TextView tv = Ui.text(this, label, 15, Ui.TEXT, true);
         tv.setGravity(Gravity.CENTER);
         tv.setPadding(Ui.dp(this, 16), Ui.dp(this, 10), Ui.dp(this, 16), Ui.dp(this, 10));
@@ -570,7 +658,8 @@ public class VideoFeedActivity extends Activity {
             v.setBackground(has ? Ui.round(Ui.TEXT, Ui.dp(this, 20)) : Ui.round(0x1FFFFFFF, Ui.dp(this, 20)));
             ((TextView) v).setTextColor(has ? Ui.BLACK : Ui.TEXT);
         });
-        LinearLayout.LayoutParams lp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams lp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = Ui.dp(this, 8);
         tv.setLayoutParams(lp);
         return tv;
@@ -580,27 +669,29 @@ public class VideoFeedActivity extends Activity {
         panelOpen = false;
         panel.setVisibility(View.GONE);
         panel.removeAllViews();
-        showHud();
+        showImmersive();
     }
 
     private String speedLabel() {
-        return String.format(java.util.Locale.US, "%.2f×", Prefs.speed());
+        return String.format(Locale.US, "倍速 %.1f×（▲▼）", Prefs.speed());
     }
 
-    private void cycleSpeed() {
-        float[] all = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f};
+    private void adjustSpeed(float delta) {
         float cur = Prefs.speed();
-        int idx = 0;
-        for (int i = 0; i < all.length; i++) {
-            if (Math.abs(all[i] - cur) < 0.01f) {
-                idx = i;
-            }
+        float next = Math.round((cur + delta) * 10f) / 10f;
+        if (next < 0.5f) {
+            next = 0.5f;
         }
-        float next = all[(idx + 1) % all.length];
+        if (next > 3.0f) {
+            next = 3.0f;
+        }
         Prefs.setSpeed(next);
-        player.setPlaybackParameters(new PlaybackParameters(next));
-        Ui.toast(this, "播放速度 " + String.format(java.util.Locale.US, "%.2f×", next));
-        closePanel();
+        if (player != null) {
+            player.setPlaybackParameters(new PlaybackParameters(next));
+        }
+        if (speedChip != null) {
+            speedChip.setText(speedLabel());
+        }
     }
 
     private String qualityLabel() {
@@ -634,7 +725,8 @@ public class VideoFeedActivity extends Activity {
                 post.liked = target;
                 post.likes += target ? 1 : -1;
                 main.post(() -> {
-                    bindOverlay(post, post.firstVideo() == null ? new MediaItem() : post.firstVideo());
+                    MediaItem m = post.firstVideo();
+                    bindOverlay(post, m == null ? new MediaItem() : m);
                     Ui.toast(this, target ? "已点赞" : "已取消点赞");
                 });
             } catch (Exception e) {
@@ -644,17 +736,20 @@ public class VideoFeedActivity extends Activity {
         closePanel();
     }
 
-    /* ---------------- HUD ---------------- */
+    /* ---------------- 沉浸模式 ---------------- */
 
-    private void showHud() {
-        setHudVisible(true);
+    private void showImmersive() {
+        applyChrome(true);
         main.removeCallbacks(hideHud);
+        main.removeCallbacks(hideImmersive);
         if (!panelOpen) {
             main.postDelayed(hideHud, 4000);
+            // 10 秒后连作者信息一起隐藏，进入沉浸式观看
+            main.postDelayed(hideImmersive, IMMERSIVE_DELAY_MS);
         }
     }
 
-    private void setHudVisible(boolean visible) {
+    private void applyChrome(boolean visible) {
         if (panelOpen) {
             return;
         }
@@ -663,12 +758,24 @@ public class VideoFeedActivity extends Activity {
         hintText.setVisibility(v);
         timeText.setVisibility(v);
         progressLine.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+        infoPanel.setVisibility(v);
+        if (!visible) {
+            topBar.setVisibility(View.INVISIBLE);
+        } else {
+            topBar.setVisibility(View.VISIBLE);
+        }
     }
 
     /* ---------------- 按键 ---------------- */
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode != KeyEvent.KEYCODE_BACK && keyCode != KeyEvent.KEYCODE_MENU) {
+            if (infoPanel.getVisibility() != View.VISIBLE) {
+                showImmersive();
+                return true;
+            }
+        }
         if (panelOpen) {
             if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_MENU) {
                 closePanel();
@@ -723,12 +830,10 @@ public class VideoFeedActivity extends Activity {
         }
         if (player.isPlaying()) {
             player.pause();
-            userPaused = true;
         } else {
             player.play();
-            userPaused = false;
         }
-        showHud();
+        showImmersive();
     }
 
     private void seekBy(long delta) {
@@ -738,7 +843,7 @@ public class VideoFeedActivity extends Activity {
         long target = Math.max(0, Math.min(player.getDuration(), player.getCurrentPosition() + delta));
         player.seekTo(target);
         Ui.toast(this, (delta > 0 ? "快进 " : "快退 ") + Math.abs(delta / 1000) + " 秒");
-        showHud();
+        showImmersive();
     }
 
     /* ---------------- 生命周期 ---------------- */
@@ -764,8 +869,7 @@ public class VideoFeedActivity extends Activity {
         }
     }
 
-    /** 底部细进度条 + 时间码，避免整块 PlayerView 控件在 TV 上过重。 */
-    @OptIn(markerClass = UnstableApi.class)
+    /** 底部细进度条 + 时间码。 */
     static class ProgressBarLine extends View {
         private final android.graphics.Paint bg = new android.graphics.Paint();
         private final android.graphics.Paint fg = new android.graphics.Paint();
@@ -800,11 +904,9 @@ public class VideoFeedActivity extends Activity {
         }
     }
 
-    /** 简单桥：让进度条读取播放进度 */
     static class ViewParentHost {
         float pos;
         float dur;
-
         static ViewParentHost sInstance;
 
         static ViewParentHost get() {
@@ -839,8 +941,8 @@ public class VideoFeedActivity extends Activity {
     private static String fmt(long ms) {
         long s = ms / 1000;
         if (s >= 3600) {
-            return String.format(java.util.Locale.US, "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60);
+            return String.format(Locale.US, "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60);
         }
-        return String.format(java.util.Locale.US, "%d:%02d", s / 60, s % 60);
+        return String.format(Locale.US, "%d:%02d", s / 60, s % 60);
     }
 }
