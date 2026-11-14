@@ -31,7 +31,6 @@ import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.AspectRatioFrameLayout;
-import androidx.media3.ui.PlayerView;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -70,7 +69,8 @@ public class VideoFeedActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
 
     private ExoPlayer player;
-    private PlayerView playerView;
+    private AspectRatioFrameLayout aspect;
+    private android.view.TextureView textureView;
     private FrameLayout stage;
     private ImageView transition;
 
@@ -122,13 +122,16 @@ public class VideoFeedActivity extends Activity {
         root.addView(stage, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        playerView = new PlayerView(this);
-        playerView.setUseController(false);
-        playerView.setShutterBackgroundColor(Color.BLACK);
-        playerView.setResizeMode(Prefs.fillScreen()
+        // 用 TextureView 而不是 SurfaceView：本机（4K 盒子）上 SurfaceView 会被父容器的
+        // 背景层盖住，表现为"有声音、画面全黑"。
+        aspect = new AspectRatioFrameLayout(this);
+        aspect.setResizeMode(Prefs.fillScreen()
                 ? AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 : AspectRatioFrameLayout.RESIZE_MODE_FIT);
-        stage.addView(playerView, new FrameLayout.LayoutParams(
+        textureView = new android.view.TextureView(this);
+        aspect.addView(textureView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        stage.addView(aspect, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // 切换用缩略图层
@@ -280,7 +283,7 @@ public class VideoFeedActivity extends Activity {
                 .setMediaSourceFactory(msf)
                 .setLoadControl(loadControl)
                 .build();
-        playerView.setPlayer(player);
+        player.setVideoTextureView(textureView);
         player.setVolume(Prefs.muted() ? 0f : 1f);
         player.setPlaybackParameters(new PlaybackParameters(Prefs.speed()));
         applyQuality();
@@ -525,7 +528,7 @@ public class VideoFeedActivity extends Activity {
         panel.addView(panelChip("清晰度 " + qualityLabel(), v -> cycleQuality()));
         panel.addView(panelChip(Prefs.fillScreen() ? "画面 铺满" : "画面 适应", v -> {
             Prefs.setFillScreen(!Prefs.fillScreen());
-            playerView.setResizeMode(Prefs.fillScreen()
+            aspect.setResizeMode(Prefs.fillScreen()
                     ? AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     : AspectRatioFrameLayout.RESIZE_MODE_FIT);
             closePanel();

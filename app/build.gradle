@@ -2,10 +2,10 @@ plugins {
     id "com.android.application"
 }
 
-def verNameProp = (findProperty("versionName") ?: "0.2.0").toString().trim()
-def verCodeProp = (findProperty("versionCode") ?: "200").toString().trim()
+def verNameProp = (findProperty("versionName") ?: "0.2.2").toString().trim()
+def verCodeProp = (findProperty("versionCode") ?: "202").toString().trim()
 if (verNameProp.isEmpty()) { verNameProp = "0.2.0" }
-def verCodeValue = 200
+def verCodeValue = 202
 try { if (!verCodeProp.isEmpty()) { verCodeValue = verCodeProp.toInteger() } } catch (Exception ignored) { }
 
 def keystorePropertiesFile = rootProject.file("keystore.properties")
