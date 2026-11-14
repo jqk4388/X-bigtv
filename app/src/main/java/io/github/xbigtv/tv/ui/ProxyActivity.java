@@ -20,6 +20,8 @@ import java.util.concurrent.Executors;
 
 import io.github.xbigtv.tv.data.Prefs;
 import io.github.xbigtv.tv.net.Http;
+import io.github.xbigtv.tv.login.QrBitmap;
+import io.github.xbigtv.tv.net.LanProxyFormServer;
 import io.github.xbigtv.tv.net.LocalProxy;
 import io.github.xbigtv.tv.xapi.XApi;
 
@@ -40,6 +42,9 @@ public class ProxyActivity extends Activity {
     private TextView passValue;
     private TextView enableValue;
     private TextView testResult;
+    private LanProxyFormServer formServer;
+    private android.widget.ImageView qrView;
+    private TextView qrUrl;
 
     private boolean enabled;
     private int type;
@@ -53,6 +58,53 @@ public class ProxyActivity extends Activity {
         super.onCreate(savedInstanceState);
         load();
         buildUi();
+        startFormServer();
+    }
+
+    /** 手机扫码填代理：电视上出二维码，手机上填完直接写回电视。 */
+    private void startFormServer() {
+        formServer = new LanProxyFormServer((type, host, portValue, user, pass) -> {
+            if (host == null || host.trim().isEmpty()) {
+                return "服务器地址不能为空";
+            }
+            if (portValue <= 0 || portValue > 65535) {
+                return "端口不合法";
+            }
+            final int ft = type;
+            final String fh = host.trim();
+            final int fp = portValue;
+            final String fu = user == null ? "" : user;
+            final String fpass = pass == null ? "" : pass;
+            main.post(() -> {
+                this.enabled = true;
+                this.type = ft;
+                this.host = fh;
+                this.port = fp;
+                this.user = fu;
+                this.pass = fpass;
+                save();
+                refreshValues();
+                Ui.toast(this, "已从手机保存代理");
+            });
+            return "ok";
+        });
+        formServer.start();
+        String url = formServer.url();
+        if (url == null) {
+            if (qrUrl != null) {
+                qrUrl.setText("未检测到局域网 IP，请手动填写");
+            }
+            return;
+        }
+        if (qrUrl != null) {
+            qrUrl.setText(url);
+        }
+        if (qrView != null) {
+            android.graphics.Bitmap qr = QrBitmap.make(url, Ui.dp(this, 150));
+            if (qr != null) {
+                qrView.setImageBitmap(qr);
+            }
+        }
     }
 
     private void load() {
@@ -87,6 +139,31 @@ public class ProxyActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout col = Ui.linear(this, LinearLayout.VERTICAL);
         scroll.addView(col);
+
+        LinearLayout qrCard = Ui.linear(this, LinearLayout.HORIZONTAL);
+        qrCard.setGravity(Gravity.CENTER_VERTICAL);
+        qrCard.setPadding(Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14));
+        qrCard.setBackground(Ui.round(Ui.SURFACE, Ui.dp(this, 12)));
+        qrView = new android.widget.ImageView(this);
+        int qs = Ui.dp(this, 150);
+        qrView.setLayoutParams(Ui.lp(qs, qs));
+        qrView.setBackgroundColor(android.graphics.Color.WHITE);
+        qrCard.addView(qrView);
+        LinearLayout qrCol = Ui.linear(this, LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams qclp = Ui.lp(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        qclp.leftMargin = Ui.dp(this, 14);
+        qrCol.setLayoutParams(qclp);
+        qrCol.addView(Ui.text(this, "手机扫码填代理（免遥控器打字）", 16, Ui.TEXT, true));
+        qrCol.addView(Ui.text(this, "手机扫这个码，在页面上填地址端口，保存后电视立刻生效", 12, Ui.TEXT_DIM, false));
+        qrUrl = Ui.text(this, "", 12, Ui.BLUE, true);
+        qrUrl.setPadding(0, Ui.dp(this, 8), 0, 0);
+        qrCol.addView(qrUrl);
+        qrCard.addView(qrCol);
+        LinearLayout.LayoutParams qcLp = Ui.lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        qcLp.bottomMargin = Ui.dp(this, 14);
+        qrCard.setLayoutParams(qcLp);
+        col.addView(qrCard);
 
         stateValue = Ui.text(this, "", 14, Ui.TEXT_DIM, false);
         stateValue.setPadding(0, 0, 0, Ui.dp(this, 10));
@@ -291,6 +368,9 @@ public class ProxyActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         io.shutdownNow();
+        if (formServer != null) {
+            formServer.stop();
+        }
     }
 
     interface ValueSupplier {

@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import io.github.xbigtv.tv.xapi.MediaItem;
 import io.github.xbigtv.tv.xapi.Post;
 import io.github.xbigtv.tv.xapi.TimelinePage;
 import io.github.xbigtv.tv.xapi.XApi;
@@ -122,6 +123,16 @@ public class DetailActivity extends Activity implements PostAdapter.Listener {
 
     @Override
     public void onOpen(Post post) {
+        // 详情页里再点图片 → 全屏翻页看大图
+        java.util.List<MediaItem> photos = post.photos();
+        if (!post.hasVideo() && !photos.isEmpty()) {
+            java.util.List<String> urls = new ArrayList<>();
+            for (MediaItem m : photos) {
+                urls.add(PostCardView.thumb(m, 1600));
+            }
+            ImageViewerActivity.start(this, urls, 0);
+            return;
+        }
         if (post.hasVideo()) {
             List<Post> feed = new ArrayList<>();
             int index = 0;

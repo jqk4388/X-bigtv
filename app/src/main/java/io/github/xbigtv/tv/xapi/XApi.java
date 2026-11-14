@@ -252,6 +252,97 @@ public final class XApi {
         throw new IOException("操作失败");
     }
 
+    /* ---------------- 分组（X 网页版的 Pinned Timelines / 列表） ---------------- */
+
+    /** 首页一个分组：目前 X 网页端的分组就是「Pin 到首页的列表」。 */
+    public static final class Tab {
+        public final String name;
+        public final String listId;
+
+        public Tab(String name, String listId) {
+            this.name = name;
+            this.listId = listId;
+        }
+    }
+
+    /** 时间线来源：翻页时按各自的来源取数据（推荐/关注/列表/视频搜索）。 */
+    public interface TimelineSource {
+        TimelinePage fetch(String cursor) throws Exception;
+    }
+
+    /** 读取 Pin 到首页的分组（网页端 tab 栏就是这些）。 */
+    public static java.util.List<Tab> pinnedTimelines() {
+        java.util.List<Tab> out = new java.util.ArrayList<>();
+        try {
+            String qid = Ops.id("PinnedTimelines");
+            if (Str.isEmpty(qid)) {
+                return out;
+            }
+            String url = "https://x.com/i/api/graphql/" + qid + "/PinnedTimelines?variables=%7B%7D&features="
+                    + URLEncoder.encode(FEATURES, "UTF-8");
+            Request req = base(url).get().build();
+            try (Response resp = Http.client().newCall(req).execute()) {
+                if (resp.body() == null) {
+                    return out;
+                }
+                String text = resp.body().string();
+                JSONObject root = new JSONObject(text);
+                JSONObject data = root.optJSONObject("data");
+                JSONObject pt = data == null ? null : data.optJSONObject("pinned_timelines");
+                JSONArray arr = pt == null ? null : pt.optJSONArray("pinned_timelines");
+                if (arr == null) {
+                    return out;
+                }
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject item = arr.optJSONObject(i);
+                    if (item == null) {
+                        continue;
+                    }
+                    JSONObject list = item.optJSONObject("list");
+                    if (list == null) {
+                        continue;
+                    }
+                    String name = list.optString("name", "");
+                    String id = list.optString("id_str", "");
+                    if (!name.isEmpty() && !id.isEmpty()) {
+                        out.add(new Tab(name, id));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w("XBigTV", "pinnedTimelines failed: " + e);
+        }
+        return out;
+    }
+
+    /** 某个列表（分组）的时间线，翻页用同一个 cursor。 */
+    public static TimelinePage listTimeline(String listId, String cursor) throws IOException {
+        String qid = Ops.id("ListLatestTweetsTimeline");
+        if (Str.isEmpty(qid)) {
+            throw new IOException("缺少接口 ID: ListLatestTweetsTimeline");
+        }
+        JSONObject v = new JSONObject();
+        try {
+            v.put("listId", listId);
+            v.put("count", 20);
+            if (!Str.isEmpty(cursor)) {
+                v.put("cursor", cursor);
+            }
+        } catch (Exception ignored) {
+        }
+        String url = "https://x.com/i/api/graphql/" + qid + "/ListLatestTweetsTimeline?variables="
+                + URLEncoder.encode(v.toString(), "UTF-8") + "&features="
+                + URLEncoder.encode(FEATURES, "UTF-8");
+        Request req = base(url).get().build();
+        try (Response resp = Http.client().newCall(req).execute()) {
+            String text = resp.body() == null ? "" : resp.body().string();
+            if (resp.code() == 401 || resp.code() == 403) {
+                throw new IOException("登录态失效（" + resp.code() + "），请重新登录");
+            }
+            return TimelineParser.parseTimeline(text);
+        }
+    }
+
     /* ---------------- 账号信息 ---------------- */
 
     /**

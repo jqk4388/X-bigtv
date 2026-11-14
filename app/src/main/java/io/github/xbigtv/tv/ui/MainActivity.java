@@ -11,6 +11,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -25,19 +26,30 @@ import java.util.concurrent.Executors;
 import io.github.xbigtv.tv.data.Prefs;
 import io.github.xbigtv.tv.login.LoginActivity;
 import io.github.xbigtv.tv.update.UpdateManager;
-import io.github.xbigtv.tv.xapi.MediaItem;
 import io.github.xbigtv.tv.xapi.Ops;
 import io.github.xbigtv.tv.xapi.Post;
 import io.github.xbigtv.tv.xapi.TimelinePage;
 import io.github.xbigtv.tv.xapi.XApi;
 import io.github.xbigtv.tv.xapi.XSession;
 
-/** 主界面：遥控器上下看帖，OK 打开视频/图片，长按 OK 刷新回到顶部。 */
+/**
+ * 主界面：顶部 tab = 为你推荐 / 关注 / X 网页端 Pin 到首页的分组（列表）；
+ * 遥控器上下看帖，OK 看详情（图片帖先进详情看评论），长按 OK 刷新回到顶部，连按两次返回才退出。
+ */
 public class MainActivity extends Activity implements PostAdapter.Listener {
 
-    private static final int MODE_FOR_YOU = 0;
-    private static final int MODE_FOLLOWING = 1;
-    private static final int MODE_VIDEO = 2;
+    /** 一个 tab：名字 + 取数据的方式。 */
+    private static final class TabDef {
+        final String name;
+        final int mode;      // 0 为你推荐 1 关注 2 视频搜索 3 列表
+        final String listId;
+
+        TabDef(String name, int mode, String listId) {
+            this.name = name;
+            this.mode = mode;
+            this.listId = listId;
+        }
+    }
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -46,15 +58,18 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
     private PostAdapter adapter;
     private TextView statusView;
     private LinearLayout tabBar;
-    private final TextView[] tabViews = new TextView[3];
-    private final View[] tabBars = new View[3];
 
-    private int mode = MODE_FOR_YOU;
+    private final List<TabDef> tabs = new ArrayList<>();
+    private final List<TextView> tabViews = new ArrayList<>();
+    private final List<View> tabBars = new ArrayList<>();
+    private int tabIndex = 0;
+
     private String cursor = "";
     private boolean loading;
     private boolean exhausted;
     private long lastFocusRequest;
     private long lastLongPressAt;
+    private long lastBackAt;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,15 +80,19 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
             finish();
             return;
         }
+        // 默认 tab（分组稍后异步补上）
+        tabs.add(new TabDef("为你推荐", 0, null));
+        tabs.add(new TabDef("关注", 1, null));
+        tabs.add(new TabDef("视频", 2, null));
         buildUi();
         load(true);
         refreshOpsInBackground();
         UpdateManager.checkOnStart(this);
+        loadTabsAsync();
     }
 
     private void refreshOpsInBackground() {
-        long stamp = Prefs.opsStamp();
-        if (System.currentTimeMillis() - stamp < 12L * 3600_000L) {
+        if (System.currentTimeMillis() - Prefs.opsStamp() < 12L * 3600_000L) {
             return;
         }
         Executors.newSingleThreadExecutor().execute(() -> {
@@ -81,6 +100,25 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
                 Ops.refresh();
             } catch (Throwable ignored) {
             }
+        });
+    }
+
+    /** 从 X 拉「Pin 到首页」的分组，追加成 tab，和网页端顺序一致。 */
+    private void loadTabsAsync() {
+        io.execute(() -> {
+            final List<XApi.Tab> pinned = XApi.pinnedTimelines();
+            if (pinned.isEmpty()) {
+                return;
+            }
+            main.post(() -> {
+                if (isFinishing()) {
+                    return;
+                }
+                for (XApi.Tab t : pinned) {
+                    tabs.add(new TabDef(t.name, 3, t.listId));
+                }
+                rebuildTabBar();
+            });
         });
     }
 
@@ -92,50 +130,24 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
         root.addView(col, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // ---------------- 顶部栏 ----------------
         LinearLayout header = Ui.linear(this, LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(Ui.dp(this, 26), Ui.dp(this, 10), Ui.dp(this, 22), Ui.dp(this, 6));
+        header.setPadding(Ui.dp(this, 22), Ui.dp(this, 10), Ui.dp(this, 18), Ui.dp(this, 6));
 
-        TextView logo = Ui.text(this, "X", 30, Ui.TEXT, true);
-        header.addView(logo);
-
+        header.addView(Ui.text(this, "X", 28, Ui.TEXT, true));
         View logoGap = new View(this);
-        logoGap.setLayoutParams(Ui.lp(Ui.dp(this, 22), 1));
+        logoGap.setLayoutParams(Ui.lp(Ui.dp(this, 16), 1));
         header.addView(logoGap);
 
+        // 分组可能很多：横向可滚动
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        hs.setLayoutParams(Ui.lp(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         tabBar = Ui.linear(this, LinearLayout.HORIZONTAL);
         tabBar.setGravity(Gravity.CENTER_VERTICAL);
-        String[] names = {"为你推荐", "关注", "视频"};
-        for (int i = 0; i < names.length; i++) {
-            final int idx = i;
-            LinearLayout item = Ui.linear(this, LinearLayout.VERTICAL);
-            item.setGravity(Gravity.CENTER_HORIZONTAL);
-            item.setPadding(Ui.dp(this, 14), Ui.dp(this, 6), Ui.dp(this, 14), Ui.dp(this, 4));
-            item.setFocusable(true);
-            item.setFocusableInTouchMode(false);
-
-            TextView tv = Ui.text(this, names[i], 17, Ui.TEXT_DIM, true);
-            item.addView(tv);
-            View bar = new View(this);
-            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 3));
-            blp.topMargin = Ui.dp(this, 6);
-            bar.setLayoutParams(blp);
-            bar.setBackground(Ui.round(Ui.BLUE, Ui.dp(this, 2)));
-            bar.setVisibility(View.INVISIBLE);
-            item.addView(bar);
-
-            tabViews[i] = tv;
-            tabBars[i] = bar;
-            item.setOnClickListener(v -> switchMode(idx));
-            item.setOnFocusChangeListener((v, has) ->
-                    v.setBackground(has ? Ui.round(0x14FFFFFF, Ui.dp(this, 10)) : null));
-            tabBar.addView(item);
-        }
-        header.addView(tabBar);
-
-        View flex = new View(this);
-        header.addView(flex, Ui.lp(0, 1, 1f));
+        hs.addView(tabBar, new android.widget.HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        header.addView(hs);
 
         header.addView(topButton("刷新", v -> load(true)));
         header.addView(topButton("搜索", v -> startActivity(new Intent(this, SearchActivity.class))));
@@ -144,13 +156,12 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
 
         String who = XSession.screenName.isEmpty() ? "账号" : "@" + XSession.screenName;
         TextView account = Ui.text(this, who, 14, Ui.TEXT_DIM, true);
-        account.setPadding(Ui.dp(this, 12), Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 8));
+        account.setPadding(Ui.dp(this, 10), Ui.dp(this, 8), Ui.dp(this, 2), Ui.dp(this, 8));
         header.addView(account);
 
         col.addView(header);
         col.addView(Ui.divider(this));
 
-        // ---------------- 列表 ----------------
         FrameLayout listWrap = new FrameLayout(this);
         listWrap.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -180,13 +191,50 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
 
         col.addView(listWrap);
         setContentView(root);
-        updateTabs();
+        rebuildTabBar();
+    }
+
+    private void rebuildTabBar() {
+        tabBar.removeAllViews();
+        tabViews.clear();
+        tabBars.clear();
+        for (int i = 0; i < tabs.size(); i++) {
+            final int idx = i;
+            TabDef def = tabs.get(i);
+            // 直接用 TextView 当 tab：避免嵌套 LinearLayout 在 HorizontalScrollView 里被压窄
+            TextView tv = Ui.text(this, def.name, 16, Ui.TEXT_DIM, true);
+            tv.setSingleLine(true);
+            tv.setGravity(Gravity.CENTER);
+            tv.setPadding(Ui.dp(this, 14), Ui.dp(this, 9), Ui.dp(this, 14), Ui.dp(this, 9));
+            tv.setFocusable(true);
+            tv.setFocusableInTouchMode(false);
+            LinearLayout.LayoutParams lp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.rightMargin = Ui.dp(this, 4);
+            tv.setLayoutParams(lp);
+            tv.setOnClickListener(v -> switchTab(idx));
+            tv.setOnKeyListener((v, keyCode, event) -> {
+                if (event.getAction() == KeyEvent.ACTION_DOWN
+                        && (keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                        || keyCode == KeyEvent.KEYCODE_DPAD_CENTER && false)) {
+                    focusFirst();
+                    return true;
+                }
+                return false;
+            });
+            tv.setOnFocusChangeListener((v, has) ->
+                    v.setBackground(has ? Ui.round(0x1FFFFFFF, Ui.dp(this, 18)) : null));
+            tabViews.add(tv);
+            tabBars.add(new View(this));
+            tabBar.addView(tv);
+        }
+        updateTabStyles();
     }
 
     private View topButton(String label, View.OnClickListener onClick) {
-        TextView tv = Ui.text(this, label, 15, Ui.TEXT_DIM, true);
+        TextView tv = Ui.text(this, label, 14, Ui.TEXT_DIM, true);
         tv.setGravity(Gravity.CENTER);
-        tv.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 14), Ui.dp(this, 8));
+        tv.setPadding(Ui.dp(this, 12), Ui.dp(this, 8), Ui.dp(this, 12), Ui.dp(this, 8));
         tv.setFocusable(true);
         tv.setFocusableInTouchMode(false);
         tv.setOnClickListener(onClick);
@@ -196,29 +244,42 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
         });
         LinearLayout.LayoutParams lp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.rightMargin = Ui.dp(this, 6);
+        lp.rightMargin = Ui.dp(this, 4);
         tv.setLayoutParams(lp);
         return tv;
     }
 
-    private void updateTabs() {
-        for (int i = 0; i < tabViews.length; i++) {
-            if (tabViews[i] == null) {
-                continue;
-            }
-            tabViews[i].setTextColor(i == mode ? Ui.TEXT : Ui.TEXT_DIM);
-            tabBars[i].setVisibility(i == mode ? View.VISIBLE : View.INVISIBLE);
+    private void updateTabStyles() {
+        for (int i = 0; i < tabViews.size(); i++) {
+            TextView tv = tabViews.get(i);
+            boolean active = i == tabIndex;
+            tv.setTextColor(active ? Ui.TEXT : Ui.TEXT_DIM);
+            tv.setBackground(active ? Ui.round(0x1A1D9BF0, Ui.dp(this, 18)) : null);
         }
     }
 
-    private void switchMode(int m) {
-        if (m == mode) {
+    private void switchTab(int idx) {
+        if (idx == tabIndex || idx >= tabs.size()) {
             return;
         }
-        mode = m;
-        updateTabs();
+        tabIndex = idx;
+        updateTabStyles();
         rv.scrollToPosition(0);
         load(true);
+        main.postDelayed(this::focusFirst, 500);
+    }
+
+    /** 当前 tab 对应的取数方式；视频流也用它继续翻页。 */
+    private XApi.TimelineSource sourceFor(TabDef def) {
+        if (def.mode == 3 && !TextUtils.isEmpty(def.listId)) {
+            final String listId = def.listId;
+            return cursor -> XApi.listTimeline(listId, cursor);
+        }
+        if (def.mode == 2) {
+            return cursor -> XApi.videoFeed(null, cursor);
+        }
+        final boolean following = def.mode == 1;
+        return cursor -> XApi.home(following, cursor);
     }
 
     private void load(boolean reset) {
@@ -234,24 +295,18 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
             exhausted = false;
         }
         final String useCursor = reset ? "" : cursor;
-        final int useMode = mode;
+        final int useTab = tabIndex;
         statusView.setVisibility(adapter.getItemCount() == 0 ? View.VISIBLE : View.GONE);
         statusView.setText("正在加载…");
 
+        final XApi.TimelineSource source = sourceFor(tabs.get(useTab));
         io.execute(() -> {
             TimelinePage page;
             try {
-                if (useMode == MODE_FOR_YOU) {
-                    page = XApi.home(false, useCursor);
-                } else if (useMode == MODE_FOLLOWING) {
-                    page = XApi.home(true, useCursor);
-                } else {
-                    page = XApi.videoFeed(null, useCursor);
-                }
+                page = source.fetch(useCursor);
                 if (page.error.contains("404")) {
                     Ops.refresh();
-                    page = useMode == MODE_VIDEO ? XApi.videoFeed(null, useCursor)
-                            : XApi.home(useMode == MODE_FOLLOWING, useCursor);
+                    page = source.fetch(useCursor);
                 }
             } catch (Throwable t) {
                 boolean stale = t.getMessage() != null && t.getMessage().contains("404");
@@ -260,21 +315,20 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
                 if (stale) {
                     try {
                         Ops.refresh();
-                        page = useMode == MODE_VIDEO ? XApi.videoFeed(null, useCursor)
-                                : XApi.home(useMode == MODE_FOLLOWING, useCursor);
+                        page = source.fetch(useCursor);
                     } catch (Throwable t2) {
                         page.error = t2.getMessage() == null ? "网络请求失败" : t2.getMessage();
                     }
                 }
             }
             final TimelinePage result = page;
-            main.post(() -> onPage(result, reset, useMode));
+            main.post(() -> onPage(result, reset, useTab));
         });
     }
 
-    private void onPage(TimelinePage page, boolean reset, int useMode) {
+    private void onPage(TimelinePage page, boolean reset, int useTab) {
         loading = false;
-        if (useMode != mode) {
+        if (useTab != tabIndex) {
             return;
         }
         if (!page.ok() && page.posts.isEmpty()) {
@@ -291,25 +345,16 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
         } else {
             cursor = page.bottomCursor;
         }
-        if (useMode == MODE_VIDEO) {
-            List<Post> only = new ArrayList<>();
-            for (Post p : page.posts) {
-                if (p.hasVideo()) {
-                    only.add(p);
-                }
-            }
-            page.posts.clear();
-            page.posts.addAll(only);
-        }
         if (reset) {
             adapter.replace(page.posts);
             focusFirst();
+            main.postDelayed(this::focusFirst, 400);
         } else {
             adapter.append(page.posts);
         }
         statusView.setVisibility(adapter.getItemCount() == 0 ? View.VISIBLE : View.GONE);
         if (adapter.getItemCount() == 0) {
-            statusView.setText("这里暂时没有内容，换个分类看看");
+            statusView.setText("这个分组暂时没有内容");
         }
     }
 
@@ -335,6 +380,7 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
         });
     }
 
+    /** OK：视频进竖屏流；图片/文字先进详情看评论（详情里再点图片才全屏翻页）。 */
     @Override
     public void onOpen(Post post) {
         if (post.hasVideo()) {
@@ -353,22 +399,13 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
                 feed.add(post);
                 index = 0;
             }
-            VideoFeedActivity.start(this, feed, index, null);
-            return;
-        }
-        List<MediaItem> photos = post.photos();
-        if (!photos.isEmpty()) {
-            List<String> urls = new ArrayList<>();
-            for (MediaItem m : photos) {
-                urls.add(PostCardView.thumb(m, 1600));
-            }
-            ImageViewerActivity.start(this, urls, 0);
+            TabDef def = tabs.get(tabIndex);
+            VideoFeedActivity.start(this, feed, index, def.name, sourceFor(def));
             return;
         }
         DetailActivity.start(this, post.id);
     }
 
-    /** 长按 OK：刷新并回到最上面（抖音式刷新手势）。 */
     @Override
     public void onLongPress(Post post) {
         long now = System.currentTimeMillis();
@@ -401,7 +438,13 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            finish();
+            long now = System.currentTimeMillis();
+            if (now - lastBackAt < 2000) {
+                finish();
+                return true;
+            }
+            lastBackAt = now;
+            Ui.toast(this, "再按一次返回键退出");
             return true;
         }
         return super.onKeyDown(keyCode, event);

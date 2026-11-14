@@ -81,6 +81,10 @@ public final class TimelineParser {
         if (known != null) {
             return known;
         }
+        known = dig(data, "list", "tweets_timeline", "timeline", "instructions");
+        if (known != null) {
+            return known;
+        }
         return deepFindInstructions(data, 0);
     }
 

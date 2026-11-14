@@ -42,6 +42,8 @@ public final class Ops {
         DEFAULT.put("UserMedia", "iTSlWbsmD00dAE7Sk9xvIw");
         DEFAULT.put("Likes", "ZjyvI1V9gajq5eclHCObzA");
         DEFAULT.put("ExplorePage", "CVExg1KY6Ec9BioRBbI8Jg");
+        DEFAULT.put("PinnedTimelines", "8J1r9u3VjUveEdTY4WUTwQ");
+        DEFAULT.put("ListLatestTweetsTimeline", "UMc_lPEeKz_WiKSY8ZT7yw");
     }
 
     private Ops() {

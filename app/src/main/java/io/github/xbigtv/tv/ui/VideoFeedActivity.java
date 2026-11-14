@@ -53,16 +53,27 @@ import io.github.xbigtv.tv.xapi.XApi;
 public class VideoFeedActivity extends Activity {
 
     private static List<Post> sFeed = new ArrayList<>();
+    private static XApi.TimelineSource sSource;
     private static int sIndex = 0;
 
     private static final long IMMERSIVE_DELAY_MS = 10_000L;
 
     public static void start(Activity from, List<Post> feed, int index, String source) {
+        start(from, feed, index, source, null);
+    }
+
+    /**
+     * @param source 继续翻页时使用的来源：从某个分组进来的就继续翻该分组，
+     *               这样上下翻视频始终是同一分组的内容。null 表示用全局视频搜索。
+     */
+    public static void start(Activity from, List<Post> feed, int index, String source,
+                            XApi.TimelineSource timelineSource) {
         if (feed == null || feed.isEmpty()) {
             Ui.toast(from, "没有可播放的视频");
             return;
         }
         sFeed = new ArrayList<>(feed);
+        sSource = timelineSource;
         sIndex = Math.max(0, Math.min(index, feed.size() - 1));
         Intent it = new Intent(from, VideoFeedActivity.class);
         it.putExtra("source", source == null ? "" : source);
@@ -313,6 +324,19 @@ public class VideoFeedActivity extends Activity {
             }
 
             @Override
+            public void onVideoSizeChanged(androidx.media3.common.VideoSize size) {
+                // AspectRatioFrameLayout 只有被显式告知宽高比才会做 letterbox，
+                // 否则竖屏视频会被拉伸铺满（文字/人脸变形）。旋转时按 90° 互换。
+                if (size != null && size.height > 0 && size.width > 0) {
+                    float ratio = size.width * size.pixelWidthHeightRatio / size.height;
+                    if (rotated) {
+                        ratio = 1f / ratio;
+                    }
+                    aspect.setAspectRatio(ratio);
+                }
+            }
+
+            @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 pauseGlyph.setVisibility(isPlaying ? View.GONE : View.VISIBLE);
             }
@@ -538,7 +562,11 @@ public class VideoFeedActivity extends Activity {
         io.execute(() -> {
             TimelinePage page = null;
             try {
-                page = XApi.videoFeed(null, feedCursor);
+                if (sSource != null) {
+                    page = sSource.fetch(feedCursor);
+                } else {
+                    page = XApi.videoFeed(null, feedCursor);
+                }
             } catch (Throwable ignored) {
             }
             final TimelinePage result = page;
