@@ -2,6 +2,12 @@ plugins {
     id "com.android.application"
 }
 
+def verNameProp = (findProperty("versionName") ?: "0.2.0").toString().trim()
+def verCodeProp = (findProperty("versionCode") ?: "200").toString().trim()
+if (verNameProp.isEmpty()) { verNameProp = "0.2.0" }
+def verCodeValue = 200
+try { if (!verCodeProp.isEmpty()) { verCodeValue = verCodeProp.toInteger() } } catch (Exception ignored) { }
+
 def keystorePropertiesFile = rootProject.file("keystore.properties")
 def keystoreProperties = new Properties()
 if (keystorePropertiesFile.exists()) {
@@ -16,8 +22,8 @@ android {
         applicationId "io.github.xbigtv.tv"
         minSdk 21
         targetSdk 34
-        versionCode (project.findProperty("versionCode") ?: 200) as Integer
-        versionName (project.findProperty("versionName") ?: "0.2.0")
+        versionCode verCodeValue
+        versionName verNameProp
 
         // armeabi-v7a 电视盒子优先；APP 本体为纯 Java（播放器使用 Media3 + HLS），
         // 打包时不携带其它 ABI 的 .so，保证在 32 位 ARM 老盒子上可安装运行。
