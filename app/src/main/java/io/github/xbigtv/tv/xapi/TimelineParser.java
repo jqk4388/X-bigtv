@@ -339,11 +339,16 @@ public final class TimelineParser {
             if (vi != null) {
                 item.durationMs = vi.optLong("duration_millis", 0L);
                 JSONArray ar = vi.optJSONArray("aspect_ratio");
-                // aspect_ratio 反映视频真实朝向；original_info 有时是旋转过的静态图尺寸，
-                // 直接用它会把 16:9 视频画成竖屏，所以有 aspect_ratio 时以它为准。
+                // original_info 有时是旋转过的静态图尺寸，会把 16:9 视频画成竖屏；
+                // 两者比例不一致时以 aspect_ratio（真实朝向）为准，比例一致则保留原始像素值。
                 if (ar != null && ar.length() == 2 && ar.optInt(0) > 0 && ar.optInt(1) > 0) {
-                    item.width = ar.optInt(0) * 100;
-                    item.height = ar.optInt(1) * 100;
+                    float trueRatio = ar.optInt(0) / (float) ar.optInt(1);
+                    boolean mismatch = item.width > 0 && item.height > 0
+                            && Math.abs(item.width / (float) item.height - trueRatio) / trueRatio > 0.05f;
+                    if (item.width <= 0 || item.height <= 0 || mismatch) {
+                        item.width = ar.optInt(0) * 100;
+                        item.height = ar.optInt(1) * 100;
+                    }
                 }
                 JSONArray variants = vi.optJSONArray("variants");
                 if (variants != null) {
