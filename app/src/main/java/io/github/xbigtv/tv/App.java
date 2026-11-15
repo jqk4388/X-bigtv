@@ -18,6 +18,8 @@ public class App extends Application {
         Prefs.init(this);
         Http.reset();
         XSession.load();
+        // 局域网遥控台（固定 18930）随 App 一起起来，随时能扫码改设置
+        io.github.xbigtv.tv.net.LanBridge.get().ensureStarted();
     }
 
     public static Context ctx() {
