@@ -339,7 +339,9 @@ public final class TimelineParser {
             if (vi != null) {
                 item.durationMs = vi.optLong("duration_millis", 0L);
                 JSONArray ar = vi.optJSONArray("aspect_ratio");
-                if (ar != null && ar.length() == 2 && ar.optInt(1) > 0 && (item.width <= 0 || item.height <= 0)) {
+                // aspect_ratio 反映视频真实朝向；original_info 有时是旋转过的静态图尺寸，
+                // 直接用它会把 16:9 视频画成竖屏，所以有 aspect_ratio 时以它为准。
+                if (ar != null && ar.length() == 2 && ar.optInt(0) > 0 && ar.optInt(1) > 0) {
                     item.width = ar.optInt(0) * 100;
                     item.height = ar.optInt(1) * 100;
                 }

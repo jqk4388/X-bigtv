@@ -17,3 +17,8 @@ local.properties
 dist/
 
 keystore.properties
+
+# 调试截图/UI dump
+*.png
+ui*.xml
+u*.xml

@@ -7,6 +7,7 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewOutlineProvider;
+import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -28,7 +29,7 @@ public class PostCardView extends LinearLayout {
         /** 卡片获得焦点（用于列表内静音自动播放） */
         void onCardFocused(Post post, PostCardView card);
 
-        /** 长文折叠状态变化（OK 键） */
+        /** 长文折叠状态变化（左方向键） */
         void onExpandedChanged(Post post, boolean expanded);
 
         /** 方向键右：打开右侧平行窗口 */
@@ -42,8 +43,20 @@ public class PostCardView extends LinearLayout {
     private ImageView videoThumb;
     private TextView bodyView;
     private TextView foldHint;
+    private View mediaContent;
     private boolean expanded;
-    private static final int COLLAPSED_LINES = 6;
+    private boolean foldingEnabled = true;
+    private boolean foldNeeded;
+    /** 当前折叠后确实还有内容没显示（决定左键是否有意义） */
+    private boolean foldActive;
+    private int totalBodyLines = 1;
+    private int collapsedLineLimit = 6;
+    private int mediaNaturalH;
+    private TextView translationBody;
+    private View translationBlock;
+    private static final int DEFAULT_COLLAPSED_LINES = 6;
+    /** 有译文时原文只留这么多行，把高度让给译文和媒体 */
+    private static final int TRANSLATED_ORIGIN_LINES = 2;
 
     public PostCardView(Context context, Listener listener) {
         super(context);
@@ -77,10 +90,18 @@ public class PostCardView extends LinearLayout {
                 listener.onCardFocused(post, this);
             }
         });
-        // OK = 展开/收起长文；方向键右 = 打开右侧平行窗口
+        // 左键只负责展开/收起正文；OK 负责播放视频/看大图和打开帖子；右键打开详情侧栏。
+        // 三个键各管一件事，展开文字和全屏播放不再抢同一个键。
         setOnKeyListener((v, keyCode, event) -> {
             if (event.getAction() != KeyEvent.ACTION_DOWN) {
                 return false;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && foldActive && foldingEnabled) {
+                setExpanded(!expanded);
+                if (listener != null && post != null) {
+                    listener.onExpandedChanged(post, expanded);
+                }
+                return true;
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
                 if (post != null && listener != null) {
@@ -92,14 +113,6 @@ public class PostCardView extends LinearLayout {
             if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
                     || keyCode == KeyEvent.KEYCODE_ENTER
                     || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
-                if (post != null && isLongText(post.text)) {
-                    setExpanded(!expanded);
-                    if (listener != null) {
-                        listener.onExpandedChanged(post, expanded);
-                    }
-                    return true;
-                }
-                // 没有长文时 OK 仍然打开平行窗口
                 if (post != null && listener != null) {
                     listener.onOpen(post);
                     return true;
@@ -114,12 +127,24 @@ public class PostCardView extends LinearLayout {
     }
 
     public void bind(Post p, boolean expandedState) {
+        bind(p, expandedState, true);
+    }
+
+    public void bind(Post p, boolean expandedState, boolean allowFolding) {
         this.post = p;
+        this.foldingEnabled = allowFolding;
         this.expanded = expandedState;
         this.videoSurface = null;
         this.videoThumb = null;
         this.bodyView = null;
         this.foldHint = null;
+        this.mediaContent = null;
+        this.foldNeeded = false;
+        this.foldActive = false;
+        this.totalBodyLines = 1;
+        this.translationBody = null;
+        this.translationBlock = null;
+        this.collapsedLineLimit = DEFAULT_COLLAPSED_LINES;
         removeAllViews();
 
         if (!TextUtils.isEmpty(p.retweetedBy)) {
@@ -178,18 +203,16 @@ public class PostCardView extends LinearLayout {
 
         addView(Ui.spacer(c, 10));
 
-        // 正文：长文默认折叠 6 行，保证图片/视频能露出来；OK 键展开
+        // 正文先建立完整视图；每条长文按卡片内容与媒体高度独立计算折叠行数。
         if (!TextUtils.isEmpty(p.text)) {
             bodyView = Ui.text(c, p.text, 16, Ui.TEXT, false);
             bodyView.setLineSpacing(Ui.dp(c, 3), 1f);
             addView(bodyView);
-            if (isLongText(p.text)) {
+            if (isLongText(p.text) || p.hasTranslation()) {
+                foldNeeded = true;
                 foldHint = Ui.text(c, "", 12, Ui.BLUE, true);
                 foldHint.setPadding(0, Ui.dp(c, 2), 0, 0);
                 addView(foldHint);
-                applyFold();
-            } else {
-                bodyView.setMaxLines(Integer.MAX_VALUE);
             }
             addView(Ui.spacer(c, 6));
         }
@@ -208,18 +231,28 @@ public class PostCardView extends LinearLayout {
             tr.addView(body);
             addView(tr);
             addView(Ui.spacer(c, 6));
+            translationBlock = tr;
+            translationBody = body;
         }
 
         // 媒体
         MediaItem video = p.firstVideo();
         List<MediaItem> photos = p.photos();
         if (video != null) {
-            addView(mediaFrame(video, true, p));
+            mediaContent = mediaFrame(video, true, p);
+            addView(mediaContent);
             addView(Ui.spacer(c, 10));
         } else if (!photos.isEmpty()) {
-            addView(photoStrip(photos));
+            mediaContent = photoStrip(photos);
+            addView(mediaContent);
             addView(Ui.spacer(c, 10));
         }
+        mediaNaturalH = mediaNaturalHeight();   // 记住原始尺寸，重算时都从这里出发
+        if (foldNeeded) {
+            foldActive = true;              // 先按默认行数折一下，量完再按本帖内容微调
+            applyFold();
+        }
+        post(this::calculateCollapsedLines);    // 没有长文的帖子也要按整卡高度调媒体
 
         // 引用帖
         if (!TextUtils.isEmpty(p.quoteText)) {
@@ -377,14 +410,14 @@ public class PostCardView extends LinearLayout {
                 lineBreaks++;
             }
         }
-        return lineBreaks >= COLLAPSED_LINES || text.length() > 260;
+        return lineBreaks >= DEFAULT_COLLAPSED_LINES || text.length() > 260;
     }
 
     public boolean isExpanded() {
         return expanded;
     }
 
-    /** OK 键切换折叠 */
+    /** 左键切换折叠，OK 保留给打开帖子或媒体。 */
     public void setExpanded(boolean value) {
         this.expanded = value;
         applyFold();
@@ -394,18 +427,250 @@ public class PostCardView extends LinearLayout {
         if (bodyView == null) {
             return;
         }
-        if (expanded) {
+        boolean folded = foldingEnabled && foldActive && !expanded;
+        if (folded) {
+            bodyView.setMaxLines(Math.max(1, collapsedLineLimit));
+            bodyView.setEllipsize(TextUtils.TruncateAt.END);
+        } else {
             bodyView.setMaxLines(Integer.MAX_VALUE);
             bodyView.setEllipsize(null);
-            if (foldHint != null) {
-                foldHint.setText("收起（OK）");
+        }
+        if (foldHint != null) {
+            if (!foldingEnabled || !foldActive) {
+                foldHint.setVisibility(View.GONE);
+            } else {
+                foldHint.setVisibility(View.VISIBLE);
+                foldHint.setText(expanded ? "收起 ◀" : "… 展开全文 ◀");
             }
+        }
+        if (mediaContent != null) {
+            mediaContent.setVisibility(View.VISIBLE);
+        }
+    }
+
+    /**
+    /**
+     * 每帖单独算：正文行数由“视口 − 头像行/译文/提示行/计数 − 媒体 − 间距”推出来，
+     * 媒体太高或整卡超屏时按比例压缩，保证图片/视频整块露在屏幕里。
+     * 有译文时原文先让位（最多两行），余下高度优先给译文，译文最少留两行。
+     * 每个帖子的行数、媒体高度互不影响。
+     */
+    private void calculateCollapsedLines() {
+        if (!foldingEnabled || getWidth() <= 0) {
+            return;
+        }
+        if (bodyView == null && mediaContent == null && translationBlock == null) {
+            return;
+        }
+        int contentWidth = getWidth() - getPaddingLeft() - getPaddingRight();
+        if (contentWidth <= 0) {
+            return;
+        }
+        int widthSpec = MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY);
+        int heightSpec = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED);
+
+        int totalLines = 0;
+        int lineHeight = Ui.dp(c, 18);
+        if (bodyView != null) {
+            totalLines = measureLines(bodyView, widthSpec, heightSpec);
+            lineHeight = Math.max(Ui.dp(c, 14), bodyView.getLineHeight());
+        }
+        totalBodyLines = totalLines;
+        boolean hasTranslation = translationBody != null && !TextUtils.isEmpty(translationBody.getText());
+
+        // 除正文、译文、媒体以外的内容（转推条、头像行、提示行、引用帖、底部计数）
+        int prefixHeight = getPaddingTop() + getPaddingBottom();
+        for (int i = 0; i < getChildCount(); i++) {
+            View child = getChildAt(i);
+            if (child == bodyView || child == translationBlock || child == mediaContent) {
+                continue;
+            }
+            child.measure(widthSpec, heightSpec);
+            prefixHeight += child.getMeasuredHeight();
+            if (child.getLayoutParams() instanceof ViewGroup.MarginLayoutParams) {
+                ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) child.getLayoutParams();
+                prefixHeight += lp.topMargin + lp.bottomMargin;
+            }
+        }
+
+        int maxHeight = listViewportHeight();
+        int minMediaHeight = Ui.dp(c, 90);
+        int mediaH = mediaNaturalH > 0 ? mediaNaturalH : mediaNaturalHeight();
+        if (mediaContent != null && mediaH > 0) {
+            applyMediaHeight(mediaH);       // 上次可能被压过，先还原成原始尺寸再算
+        }
+        int trTotal = hasTranslation ? measureLines(translationBody, widthSpec, heightSpec) : 0;
+        int trLineHeight = hasTranslation ? Math.max(Ui.dp(c, 14), translationBody.getLineHeight()) : Ui.dp(c, 14);
+        int trChrome = hasTranslation ? Ui.dp(c, 20) : 0;   // “翻译自 xx · Grok”标签行
+
+        // 只估一次起点，之后只允许往下减，避免“压媒体→多显示文字→又超高”来回震荡
+        int spare = maxHeight - prefixHeight - mediaH - Ui.dp(c, 10) - trChrome;
+        int originLines;
+        int trLines = 0;
+        if (hasTranslation) {
+            originLines = Math.min(totalLines, TRANSLATED_ORIGIN_LINES);
+            int trRoom = spare - originLines * lineHeight;
+            trLines = Math.max(2, Math.min(trTotal, trRoom / Math.max(1, trLineHeight)));
+        } else if (totalLines > 0 && mediaH > 0) {
+            originLines = Math.max(1, Math.min(totalLines, spare / Math.max(1, lineHeight)));
+        } else if (totalLines > 0) {
+            originLines = Math.min(totalLines, DEFAULT_COLLAPSED_LINES);
         } else {
-            bodyView.setMaxLines(COLLAPSED_LINES);
-            bodyView.setEllipsize(TextUtils.TruncateAt.END);
-            if (foldHint != null) {
-                foldHint.setText("… 展开全文（OK）");
+            originLines = 0;
+        }
+
+        for (int pass = 0; pass < 14; pass++) {
+            collapsedLineLimit = totalLines > 0 ? Math.max(1, Math.min(totalLines, originLines)) : 0;
+            foldActive = totalLines > 0 && collapsedLineLimit < totalLines;
+            if (hasTranslation) {
+                translationBody.setMaxLines(Math.max(2, trLines));
+                translationBody.setEllipsize(TextUtils.TruncateAt.END);
             }
+            applyFold();
+
+            int cardH = measureCardHeight();
+            if (cardH <= maxHeight) {
+                break;
+            }
+            int overflow = cardH - maxHeight;
+            if (collapsedLineLimit > 1) {
+                originLines = collapsedLineLimit - 1;   // 先折正文
+                continue;
+            }
+            if (hasTranslation && trLines > 2) {
+                trLines--;                              // 再收译文，最少两行
+                continue;
+            }
+            if (mediaH > minMediaHeight) {
+                mediaH = Math.max(minMediaHeight, mediaH - overflow);
+                applyMediaHeight(mediaH);               // 最后才压媒体
+                continue;
+            }
+            break;
+        }
+    }
+
+    /** 播放器报出真实画面比例后，按比例修正媒体框，避免横屏视频被挤成竖屏。 */
+    public void applyVideoAspect(float ratio) {
+        if (ratio <= 0.05f || mediaContent == null) {
+            return;
+        }
+        ViewGroup.LayoutParams lp = mediaContent.getLayoutParams();
+        if (lp == null || lp.height <= 0) {
+            return;
+        }
+        int contentW = Math.max(Ui.dp(c, 120), getWidth() - getPaddingLeft() - getPaddingRight());
+        int maxH = Ui.dp(c, 340);
+        int h = lp.height;
+        int w = Math.round(h * ratio);
+        if (w > contentW) {
+            w = contentW;
+            h = Math.round(w / ratio);
+        }
+        if (h > maxH) {
+            h = maxH;
+            w = Math.round(h * ratio);
+        }
+        if (w == lp.width && h == lp.height) {
+            return;
+        }
+        lp.width = w;
+        lp.height = h;
+        mediaContent.setLayoutParams(lp);
+        mediaNaturalH = h;
+        post(this::calculateCollapsedLines);
+    }
+    /** 媒体当前占的自然高度（像素）。 */
+    private int mediaNaturalHeight() {
+        if (mediaContent == null) {
+            return 0;
+        }
+        ViewGroup.LayoutParams lp = mediaContent.getLayoutParams();
+        if (lp != null && lp.height > 0) {
+            return lp.height;
+        }
+        if (mediaContent instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) mediaContent;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                ViewGroup.LayoutParams clp = g.getChildAt(i).getLayoutParams();
+                if (clp != null && clp.height > 0) {
+                    return clp.height;
+                }
+            }
+        }
+        return Ui.dp(c, 180);
+    }
+
+    /** 把媒体等比压到指定高度（像素），多图行则统一压每个格子。 */
+    private void applyMediaHeight(int targetH) {
+        if (mediaContent == null || targetH <= 0) {
+            return;
+        }
+        ViewGroup.LayoutParams lp = mediaContent.getLayoutParams();
+        if (lp != null && lp.height > 0) {
+            int newW = Math.round(lp.width * (float) targetH / Math.max(1, lp.height));
+            int maxW = Math.max(Ui.dp(c, 80), getWidth() - getPaddingLeft() - getPaddingRight());
+            lp.width = Math.max(Ui.dp(c, 80), Math.min(newW, maxW));
+            lp.height = targetH;
+            mediaContent.setLayoutParams(lp);
+            return;
+        }
+        if (mediaContent instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) mediaContent;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View cell = g.getChildAt(i);
+                ViewGroup.LayoutParams clp = cell.getLayoutParams();
+                if (clp != null && clp.height > 0) {
+                    clp.height = targetH;
+                    cell.setLayoutParams(clp);
+                }
+            }
+        }
+    }
+
+    /** 按当前配置实测整卡高度（不含外部 margin）。 */
+    private int measureCardHeight() {
+        int w = getWidth();
+        if (w <= 0) {
+            return 0;
+        }
+        measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
+        return getMeasuredHeight();
+    }
+
+    /** 列表可视高度（卡片 margin 之外都算可用）。 */
+    private int listViewportHeight() {
+        int h = getResources().getDisplayMetrics().heightPixels;
+        if (getParent() instanceof View && ((View) getParent()).getHeight() > 0) {
+            // 卡片不比列表高就能整块滚进视野，列表自身的 padding 只影响滚动范围
+            h = ((View) getParent()).getHeight();
+        }
+        h -= Ui.dp(c, 6);
+        if (getLayoutParams() instanceof ViewGroup.MarginLayoutParams) {
+            ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) getLayoutParams();
+            h -= mlp.topMargin + mlp.bottomMargin;
+        }
+        return Math.max(Ui.dp(c, 120), h);
+    }
+
+    /** 去掉 maxLines/ellipsize 后量出真实行数，再恢复原状态。 */
+    private int measureLines(TextView tv, int widthSpec, int heightSpec) {
+        int savedMax = tv.getMaxLines();
+        TextUtils.TruncateAt savedEll = tv.getEllipsize();
+        tv.setMaxLines(Integer.MAX_VALUE);
+        tv.setEllipsize(null);
+        tv.measure(widthSpec, heightSpec);
+        int lines = Math.max(1, tv.getLineCount());
+        tv.setMaxLines(savedMax);
+        tv.setEllipsize(savedEll);
+        return lines;
+    }
+
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        if (w > 0) {
+            post(this::calculateCollapsedLines);
         }
     }
     /** 自动播放开启/关闭时切换缩略图与画面 */

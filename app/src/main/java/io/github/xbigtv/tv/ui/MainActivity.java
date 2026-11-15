@@ -563,6 +563,16 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
             VideoFeedActivity.start(this, feed, index, def.name, sourceFor(def));
             return;
         }
+        // 图片帖：OK 直接进全屏看图，详情/评论走右方向键，两个动作互不抢键。
+        java.util.List<io.github.xbigtv.tv.xapi.MediaItem> photos = post.photos();
+        if (!photos.isEmpty()) {
+            java.util.List<String> urls = new ArrayList<>();
+            for (io.github.xbigtv.tv.xapi.MediaItem m : photos) {
+                urls.add(PostCardView.thumb(m, 1600));
+            }
+            ImageViewerActivity.start(this, urls, 0);
+            return;
+        }
         openPane(post.id);
     }
 

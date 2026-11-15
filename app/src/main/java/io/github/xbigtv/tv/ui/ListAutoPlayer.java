@@ -4,6 +4,8 @@ import android.content.Context;
 import android.view.TextureView;
 
 import androidx.annotation.OptIn;
+import androidx.media3.common.Player;
+import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.okhttp.OkHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -27,6 +29,18 @@ public final class ListAutoPlayer {
     private ExoPlayer player;
     private String currentUrl = "";
     private PostCardView attached;
+
+    /** 播放器报出真实画面尺寸后，把卡片里的媒体框改回正确比例 */
+    private final Player.Listener sizeListener = new Player.Listener() {
+        @Override
+        public void onVideoSizeChanged(VideoSize size) {
+            if (attached == null || size.width <= 0 || size.height <= 0) {
+                return;
+            }
+            float ratio = size.width * size.pixelWidthHeightRatio / size.height;
+            attached.applyVideoAspect(ratio);
+        }
+    };
 
     public void attach(Context context, Post post, PostCardView card) {
         if (post == null || card == null || !post.hasVideo()) {
@@ -108,6 +122,7 @@ public final class ListAutoPlayer {
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(http))
                 .build();
         player.setVolume(0f);
+        player.addListener(sizeListener);
     }
 
     private String chooseUrl(MediaItem media) {

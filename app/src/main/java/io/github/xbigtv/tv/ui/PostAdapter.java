@@ -109,7 +109,7 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.VH> {
     @Override
     public void onBindViewHolder(@NonNull VH holder, int position) {
         Post p = items.get(position);
-        holder.card.bind(p, alwaysExpanded || expandedIds.contains(p.id));
+        holder.card.bind(p, alwaysExpanded || expandedIds.contains(p.id), !alwaysExpanded);
         if (position >= items.size() - 3 && listener != null) {
             listener.onNeedMore();
         }
