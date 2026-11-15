@@ -56,7 +56,7 @@ public class VideoFeedActivity extends Activity {
     private static XApi.TimelineSource sSource;
     private static int sIndex = 0;
 
-    private static final long IMMERSIVE_DELAY_MS = 10_000L;
+    private static final long IMMERSIVE_DELAY_MS = 5_000L;
 
     public static void start(Activity from, List<Post> feed, int index, String source) {
         start(from, feed, index, source, null);
@@ -104,12 +104,14 @@ public class VideoFeedActivity extends Activity {
     private LinearLayout panel;
     private TextView speedChip;
     private TextView rotateChip;
+    private TextView qualityChip;
 
     private int index;
     private boolean prepared;
     private boolean panelOpen;
     private boolean loadingMore;
     private boolean rotated;
+    private long lastBackAt;
     private boolean resumedOnce;
     private String feedCursor = "";
 
@@ -301,7 +303,7 @@ public class VideoFeedActivity extends Activity {
                 .setLoadControl(loadControl)
                 .build();
         player.setVideoTextureView(textureView);
-        player.setVolume(Prefs.muted() ? 0f : 1f);
+        player.setVolume(1f);   // 全屏播放始终有声（静音按钮已移除）
         player.setPlaybackParameters(new PlaybackParameters(Prefs.speed()));
         applyQuality();
 
@@ -623,7 +625,8 @@ public class VideoFeedActivity extends Activity {
         });
         panel.addView(speedChip);
 
-        panel.addView(panelChip("清晰度 " + qualityLabel(), v -> cycleQuality()));
+        qualityChip = panelChip("清晰度 " + qualityLabel(), v -> cycleQuality());
+        panel.addView(qualityChip);
         panel.addView(panelChip(Prefs.fillScreen() ? "画面 铺满" : "画面 适应", v -> {
             Prefs.setFillScreen(!Prefs.fillScreen());
             Post cur = sFeed.get(index);
@@ -651,11 +654,6 @@ public class VideoFeedActivity extends Activity {
 
         panel.addView(panelChip(Prefs.autoNext() ? "连播 开" : "连播 关", v -> {
             Prefs.setAutoNext(!Prefs.autoNext());
-            closePanel();
-        }));
-        panel.addView(panelChip(Prefs.muted() ? "声音 关" : "声音 开", v -> {
-            Prefs.setMuted(!Prefs.muted());
-            player.setVolume(Prefs.muted() ? 0f : 1f);
             closePanel();
         }));
         Post cur = sFeed.get(index);
@@ -741,8 +739,14 @@ public class VideoFeedActivity extends Activity {
         int q = (Prefs.quality() + 1) % 5;
         Prefs.setQuality(q);
         applyQuality();
+        // 按钮文案立刻更新，不等重新准备完
+        if (qualityChip != null) {
+            qualityChip.setText("清晰度 " + qualityLabel());
+        }
         playIndex(index, 0);
-        Ui.toast(this, "清晰度 " + qualityLabel());
+        if (qualityChip != null) {
+            qualityChip.setText("清晰度 " + qualityLabel());
+        }
     }
 
     private void doLike(Post post) {
@@ -837,9 +841,24 @@ public class VideoFeedActivity extends Activity {
             case KeyEvent.KEYCODE_MENU:
                 togglePanel();
                 return true;
-            case KeyEvent.KEYCODE_BACK:
-                finish();
+            case KeyEvent.KEYCODE_BACK: {
+                long now = System.currentTimeMillis();
+                // 1.5 秒内再按一次 → 退出（不受 UI 显隐影响，避免自动连播把 UI 又顶出来导致退不出）
+                if (now - lastBackAt < 1500) {
+                    finish();
+                    return true;
+                }
+                lastBackAt = now;
+                if (infoPanel.getVisibility() == View.VISIBLE) {
+                    // 第一次返回：只收起 UI，画面继续播
+                    main.removeCallbacks(hideHud);
+                    main.removeCallbacks(hideImmersive);
+                    applyChrome(false);
+                } else {
+                    Ui.toast(this, "再按一次返回键退出播放");
+                }
                 return true;
+            }
             case KeyEvent.KEYCODE_MEDIA_NEXT:
                 next(1);
                 return true;

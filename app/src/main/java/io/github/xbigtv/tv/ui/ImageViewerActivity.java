@@ -37,6 +37,7 @@ public class ImageViewerActivity extends Activity {
     private TextView hint;
     private int index;
     private boolean zoomed;
+    private final BackGuard backGuard = new BackGuard();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -111,7 +112,9 @@ public class ImageViewerActivity extends Activity {
                 toggleZoom();
                 return true;
             case KeyEvent.KEYCODE_BACK:
-                finish();
+                if (backGuard.shouldExit(this)) {
+                    finish();
+                }
                 return true;
             default:
                 break;

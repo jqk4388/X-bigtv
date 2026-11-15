@@ -23,11 +23,16 @@ public class PostCardView extends LinearLayout {
         void onOpen(Post post);
 
         void onLongPress(Post post);
+
+        /** 卡片获得焦点（用于列表内静音自动播放） */
+        void onCardFocused(Post post, PostCardView card);
     }
 
     private final Context c;
     private Post post;
     private final Listener listener;
+    private android.view.TextureView videoSurface;
+    private ImageView videoThumb;
 
     public PostCardView(Context context, Listener listener) {
         super(context);
@@ -62,6 +67,8 @@ public class PostCardView extends LinearLayout {
 
     public void bind(Post p) {
         this.post = p;
+        this.videoSurface = null;
+        this.videoThumb = null;
         removeAllViews();
 
         if (!TextUtils.isEmpty(p.retweetedBy)) {
@@ -297,6 +304,21 @@ public class PostCardView extends LinearLayout {
         return url;
     }
 
+    /** 列表内自动播放挂载点 */
+    public android.view.TextureView videoSurface() {
+        return videoSurface;
+    }
+
+    /** 自动播放开启/关闭时切换缩略图与画面 */
+    public void setAutoplayActive(boolean active) {
+        if (videoSurface != null) {
+            videoSurface.setVisibility(active ? View.VISIBLE : View.INVISIBLE);
+        }
+        if (videoThumb != null) {
+            videoThumb.setVisibility(active ? View.INVISIBLE : View.VISIBLE);
+        }
+    }
+
     private View mediaFrame(MediaItem m, boolean isVideo, Post p) {
         int maxW = Ui.dp(c, 620);
         int maxH = Ui.dp(c, 340);
@@ -324,12 +346,21 @@ public class PostCardView extends LinearLayout {
         frame.addView(iv);
 
         if (isVideo) {
+            // 列表内静音自动播放：把一张 TextureView 铺在缩略图上面，播放器按需挂上来
+            videoThumb = iv;
+            videoSurface = new android.view.TextureView(c);
+            videoSurface.setLayoutParams(new FrameLayout.LayoutParams(
+                    LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+            videoSurface.setVisibility(View.INVISIBLE);
+            frame.addView(videoSurface);
+
             View play = Icons.view(c, Icons.PLAY, 28, 0xFFFFFFFF);
             FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(Ui.dp(c, 56), Ui.dp(c, 56));
             plp.gravity = Gravity.CENTER;
             play.setLayoutParams(plp);
             play.setBackground(Ui.round(0xB3000000, Ui.dp(c, 28)));
             play.setPadding(Ui.dp(c, 14), Ui.dp(c, 14), Ui.dp(c, 14), Ui.dp(c, 14));
+            play.setVisibility(View.GONE);
             frame.addView(play);
 
             if (m.durationMs > 0) {

@@ -354,6 +354,8 @@ public class ProxyActivity extends Activity {
         Ui.toast(this, enabled ? "代理已应用" : "已关闭代理，走直连");
     }
 
+    private final BackGuard backGuard = new BackGuard();
+
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {

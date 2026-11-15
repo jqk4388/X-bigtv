@@ -18,6 +18,8 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.VH> {
 
         void onLongPress(Post post);
 
+        void onCardFocused(Post post, PostCardView card);
+
         void onNeedMore();
     }
 
@@ -61,6 +63,11 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.VH> {
             @Override
             public void onLongPress(Post post) {
                 listener.onLongPress(post);
+            }
+
+            @Override
+            public void onCardFocused(Post post, PostCardView card) {
+                listener.onCardFocused(post, card);
             }
         });
         RecyclerView.LayoutParams lp = new RecyclerView.LayoutParams(

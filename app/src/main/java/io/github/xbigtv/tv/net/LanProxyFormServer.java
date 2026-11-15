@@ -27,11 +27,14 @@ public final class LanProxyFormServer {
     }
 
     private final Controller controller;
+    /** 固定端口，方便直接在电脑上调试。 */
+    public static final int FIXED_PORT = 18931;
+
     private ServerSocket server;
     private Thread acceptThread;
     private volatile boolean running;
     private int port;
-    private String key;
+    
 
     public LanProxyFormServer(Controller controller) {
         this.controller = controller;
@@ -46,19 +49,18 @@ public final class LanProxyFormServer {
         if (ip == null || !running) {
             return null;
         }
-        return "http://" + ip + ":" + port + "/p/" + key;
+        return "http://" + ip + ":" + port + "/p/";
     }
 
     public synchronized void start() {
         if (running) {
             return;
         }
-        key = randomKey();
         try {
             server = new ServerSocket();
             server.setReuseAddress(true);
-            server.bind(new InetSocketAddress("0.0.0.0", 0));
-            port = server.getLocalPort();
+            server.bind(new InetSocketAddress("0.0.0.0", FIXED_PORT));
+            port = FIXED_PORT;
             running = true;
             acceptThread = new Thread(this::acceptLoop, "x-proxy-form");
             acceptThread.setDaemon(true);
@@ -154,7 +156,7 @@ public final class LanProxyFormServer {
             if (q >= 0) {
                 path = target.substring(0, q);
             }
-            if (!path.endsWith("/" + key)) {
+            if (!(path.startsWith("/p/") || path.startsWith("/c/"))) {
                 write(out, 403, "text/plain; charset=utf-8", "forbidden".getBytes(StandardCharsets.UTF_8));
                 client.close();
                 return;
@@ -262,7 +264,7 @@ public final class LanProxyFormServer {
             + "<div class=\"st\" id=\"st\"></div>"
             + "<div class=\"tip\">填完点保存，电视会立刻应用并退出本页。代理只作用于这个 App，"
             + "不影响电视系统代理。</div></div><script>"
-            + "var K=location.pathname.split('/').pop();"
+            + "var K='';"
             + "document.getElementById('go').onclick=function(){"
             + "var s=document.getElementById('st');"
             + "var b='type='+encodeURIComponent(document.getElementById('type').value)"

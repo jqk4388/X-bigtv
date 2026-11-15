@@ -230,10 +230,11 @@ public class SettingsActivity extends Activity {
         return tv;
     }
 
+    private final BackGuard backGuard = new BackGuard();
+
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            finish();
+        if (keyCode == KeyEvent.KEYCODE_BACK) {            if (backGuard.shouldExit(this)) {                finish();            }
             return true;
         }
         return super.onKeyDown(keyCode, event);

@@ -157,13 +157,18 @@ public class DetailActivity extends Activity implements PostAdapter.Listener {
     }
 
     @Override
-    public void onNeedMore() {
+    public void onCardFocused(Post post, PostCardView card) {
     }
 
     @Override
+    public void onNeedMore() {
+    }
+
+    private final BackGuard backGuard = new BackGuard();
+
+    @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            finish();
+        if (keyCode == KeyEvent.KEYCODE_BACK) {            if (backGuard.shouldExit(this)) {                finish();            }
             return true;
         }
         return super.onKeyDown(keyCode, event);

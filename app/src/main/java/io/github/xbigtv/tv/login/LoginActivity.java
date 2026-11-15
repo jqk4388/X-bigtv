@@ -38,6 +38,7 @@ import io.github.xbigtv.tv.BuildConfig;
 import io.github.xbigtv.tv.data.Prefs;
 import io.github.xbigtv.tv.net.NetProbe;
 import io.github.xbigtv.tv.net.Http;
+import io.github.xbigtv.tv.ui.BackGuard;
 import io.github.xbigtv.tv.ui.Icons;
 import io.github.xbigtv.tv.ui.MainActivity;
 import io.github.xbigtv.tv.ui.ProxyActivity;
@@ -69,6 +70,7 @@ public class LoginActivity extends Activity implements LanLinkServer.Controller 
     private LinearLayout errorPanel;
     private TextView errorText;
     private TextView errorProxyBtn;
+    private final BackGuard backGuard = new BackGuard();
     private String appliedProxyKey = "";
     private boolean finishingLogin;
     private boolean qrVisible = true;
@@ -774,9 +776,9 @@ public class LoginActivity extends Activity implements LanLinkServer.Controller 
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            if (web.canGoBack()) {
+            if (web != null && web.canGoBack()) {
                 web.goBack();
-            } else {
+            } else if (backGuard.shouldExit(this)) {
                 finish();
             }
             return true;

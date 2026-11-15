@@ -53,18 +53,21 @@ public final class LanLinkServer {
 
     private final Controller controller;
     private final Handler main = new Handler(Looper.getMainLooper());
+
+    /** 固定端口：二维码/地址不再变化，方便调试。 */
+    public static final int FIXED_PORT = 18930;
+
     private ServerSocket server;
     private Thread acceptThread;
     private volatile boolean running;
     private int port;
-    private String key;
 
     public LanLinkServer(Controller controller) {
         this.controller = controller;
     }
 
     public String key() {
-        return key;
+        return "";
     }
 
     public int port() {
@@ -76,19 +79,18 @@ public final class LanLinkServer {
         if (ip == null) {
             return null;
         }
-        return "http://" + ip + ":" + port + "/x/" + key;
+        return "http://" + ip + ":" + port + "/x/";
     }
 
     public synchronized void start() {
         if (running) {
             return;
         }
-        key = randomKey();
         try {
             server = new ServerSocket();
             server.setReuseAddress(true);
-            server.bind(new InetSocketAddress("0.0.0.0", 0));
-            port = server.getLocalPort();
+            server.bind(new InetSocketAddress("0.0.0.0", FIXED_PORT));
+            port = FIXED_PORT;
             running = true;
             acceptThread = new Thread(this::acceptLoop, "x-lan-link");
             acceptThread.setDaemon(true);
@@ -275,13 +277,10 @@ public final class LanLinkServer {
     }
 
     private boolean authorized(String path) {
-        // /x/<key> /f/<key> ...
-        int slash = path.lastIndexOf('/');
-        if (slash < 0) {
-            return false;
-        }
-        String k = path.substring(slash + 1);
-        return key != null && key.equals(k);
+        // 固定页面：只开放下面这些入口
+        return path.startsWith("/x/") || path.startsWith("/f/") || path.startsWith("/s/")
+                || path.startsWith("/t/") || path.startsWith("/k/") || path.startsWith("/y/")
+                || path.startsWith("/c/") || path.startsWith("/r/");
     }
 
     private static String param(String body, String name) {
@@ -395,7 +394,7 @@ public final class LanLinkServer {
             + "2. 也可以在电视上按「菜单」呼出扫码卡片，或用遥控器在电视上直接输入。<br>"
             + "3. 登录成功后电视会自动进入主界面，本页面可以关闭。</div>"
             + "</div><script>"
-            + "var K=location.pathname.split('/').pop();"
+            + "var K='';"
             + "var img=document.getElementById('img');"
             + "function frame(){var i=new Image();i.onload=function(){img.src=i.src;var l=document.querySelector('.loading');if(l)l.remove();};"
             + "i.onerror=function(){};i.src='/f/'+K+'?t='+Date.now();}"
