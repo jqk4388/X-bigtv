@@ -802,8 +802,31 @@ public class VideoFeedActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        boolean okKey = keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                || keyCode == KeyEvent.KEYCODE_ENTER
+                || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+                || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE;
         if (keyCode != KeyEvent.KEYCODE_BACK && keyCode != KeyEvent.KEYCODE_MENU) {
             if (infoPanel.getVisibility() != View.VISIBLE) {
+                if (okKey) {
+                    // 沉浸态 OK：暂停 → 露出 UI；继续播放 → UI 一起消失
+                    if (prepared && player != null) {
+                        if (player.isPlaying()) {
+                            player.pause();
+                            showImmersive();
+                        } else {
+                            player.play();
+                            main.removeCallbacks(hideHud);
+                            main.removeCallbacks(hideImmersive);
+                            applyChrome(false);
+                        }
+                    }
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    seekBy(keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? -10000 : 10000);
+                    return true;
+                }
                 showImmersive();
                 return true;
             }

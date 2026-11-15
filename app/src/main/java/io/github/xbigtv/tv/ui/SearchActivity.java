@@ -245,6 +245,15 @@ public class SearchActivity extends Activity implements PostAdapter.Listener {
     }
 
     @Override
+    public void onExpandedChanged(Post post, boolean expanded) {
+    }
+
+    @Override
+    public void onOpenRight(Post post) {
+        onOpen(post);
+    }
+
+    @Override
     public void onNeedMore() {
         if (!loading && !exhausted) {
             load(false);

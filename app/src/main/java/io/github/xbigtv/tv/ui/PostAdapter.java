@@ -20,14 +20,25 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.VH> {
 
         void onCardFocused(Post post, PostCardView card);
 
+        void onExpandedChanged(Post post, boolean expanded);
+
+        void onOpenRight(Post post);
+
         void onNeedMore();
     }
 
     private final List<Post> items = new ArrayList<>();
+    private final java.util.Set<String> expandedIds = new java.util.HashSet<>();
+    /** 平行窗口里不折叠长文 */
+    private boolean alwaysExpanded;
     private final Listener listener;
 
     public PostAdapter(Listener listener) {
         this.listener = listener;
+    }
+
+    public void setAlwaysExpanded(boolean value) {
+        this.alwaysExpanded = value;
     }
 
     public List<Post> items() {
@@ -69,6 +80,21 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.VH> {
             public void onCardFocused(Post post, PostCardView card) {
                 listener.onCardFocused(post, card);
             }
+
+            @Override
+            public void onExpandedChanged(Post post, boolean expanded) {
+                if (expanded) {
+                    expandedIds.add(post.id);
+                } else {
+                    expandedIds.remove(post.id);
+                }
+                listener.onExpandedChanged(post, expanded);
+            }
+
+            @Override
+            public void onOpenRight(Post post) {
+                listener.onOpenRight(post);
+            }
         });
         RecyclerView.LayoutParams lp = new RecyclerView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -83,7 +109,7 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.VH> {
     @Override
     public void onBindViewHolder(@NonNull VH holder, int position) {
         Post p = items.get(position);
-        holder.card.bind(p);
+        holder.card.bind(p, alwaysExpanded || expandedIds.contains(p.id));
         if (position >= items.size() - 3 && listener != null) {
             listener.onNeedMore();
         }

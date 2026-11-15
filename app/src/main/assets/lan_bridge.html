@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>X 大屏 · 遥控台</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#000;color:#e7e9ea;font-family:-apple-system,'PingFang SC',sans-serif}
+  .w{padding:14px 14px 40px}
+  h1{font-size:17px;margin:4px 0 12px}
+  h1 span{color:#1d9bf0}
+  h2{font-size:14px;margin:18px 0 8px;color:#1d9bf0}
+  label{display:block;font-size:12.5px;color:#71767b;margin:10px 0 5px}
+  input,select,textarea{width:100%;padding:11px;border-radius:10px;border:1px solid #2f3336;
+    background:#16181c;color:#fff;font-size:15px}
+  textarea{min-height:64px}
+  button{width:100%;margin-top:12px;padding:13px;border:none;border-radius:10px;
+    background:#1d9bf0;color:#000;font-size:15px;font-weight:700}
+  button.ghost{background:#16181c;color:#e7e9ea;border:1px solid #2f3336;font-weight:600}
+  .row{display:flex;gap:8px}
+  .row>*{flex:1}
+  .st{font-size:12.5px;color:#71767b;margin-top:8px;min-height:16px}
+  .ok{color:#00ba7c;font-weight:700}
+  .bad{color:#f91880}
+  .scr img{width:100%;border-radius:10px;border:1px solid #2f3336}
+  .tip{font-size:12px;color:#71767b;line-height:1.6;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="w">
+  <h1><span>X 大屏</span> 遥控台</h1>
+  <div class="st" id="who">读取状态…</div>
+
+  <h2>① 登录（粘贴 Cookie）</h2>
+  <textarea id="ck1" placeholder="auth_token（也可整段粘贴：auth_token=…; ct0=…）"
+            autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+  <input id="ck2" placeholder="ct0（可留空，电视会自动换取）" autocomplete="off">
+  <button id="ckgo">登录电视</button>
+  <div class="st" id="cks"></div>
+
+  <h2>② 代理</h2>
+  <label>类型</label>
+  <select id="ptype">
+    <option value="http">HTTP / HTTPS</option>
+    <option value="socks">SOCKS5</option>
+  </select>
+  <label>服务器地址（跑代理的电脑/路由 IP）</label>
+  <input id="phost" placeholder="192.168.1.48" autocomplete="off">
+  <label>端口</label>
+  <input id="pport" placeholder="7890" inputmode="numeric" autocomplete="off">
+  <div class="row">
+    <div><label>用户名</label><input id="puser" autocomplete="off"></div>
+    <div><label>密码</label><input id="ppass" type="password" autocomplete="off"></div>
+  </div>
+  <button id="pgo">保存代理</button>
+  <div class="st" id="ps"></div>
+
+  <h2>③ 播放</h2>
+  <label>默认清晰度</label>
+  <select id="quality">
+    <option value="0">自动</option>
+    <option value="1">1080P</option>
+    <option value="2">720P</option>
+    <option value="3">480P</option>
+    <option value="4">360P</option>
+  </select>
+  <label>默认倍速</label>
+  <input id="speed" inputmode="decimal" placeholder="1.0">
+  <div class="row">
+    <div><label>播完连播</label>
+      <select id="autonext"><option value="1">开</option><option value="0">关</option></select>
+    </div>
+    <div><label>横屏画面</label>
+      <select id="fill"><option value="1">铺满</option><option value="0">适应</option></select>
+    </div>
+  </div>
+  <button id="ggo">保存播放设置</button>
+  <div class="st" id="gs"></div>
+
+  <h2>④ 操作电视画面</h2>
+  <div class="scr"><img id="img" alt=""></div>
+  <div class="row"><input id="txt" placeholder="点电视里的输入框后在这里打字"></div>
+  <div class="row">
+    <button id="send" class="ghost">填入</button>
+    <button id="enter" class="ghost">回车</button>
+    <button id="reload" class="ghost">刷新页</button>
+  </div>
+  <div class="tip">页面地址固定：电视 IP + 端口 18930，重启也不变。</div>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+
+  function post(url, body) {
+    return fetch(url, {
+      method: 'POST',
+      headers: {'content-type': 'application/x-www-form-urlencoded'},
+      body: body
+    });
+  }
+
+  function load() {
+    fetch('/st/').then(function (r) { return r.json(); }).then(function (j) {
+      var acc = j.logged
+        ? '账号：<span class="ok">@' + (j.screen_name || '已登录') + '</span>'
+        : '账号：<span class="bad">未登录</span>';
+      var px = j.proxy_enabled
+        ? (j.proxy_host + ':' + j.proxy_port + ' ' + j.proxy_type)
+        : '未开启';
+      $('who').innerHTML = acc + ' · 代理：' + px + ' · 画面操作：' + (j.mirror ? '可用' : '仅设置');
+      if (j.proxy_host) { $('phost').value = j.proxy_host; }
+      if (j.proxy_port) { $('pport').value = j.proxy_port; }
+      $('ptype').value = j.proxy_type || 'http';
+      $('quality').value = String(j.quality || 0);
+      $('speed').value = (j.speed || 1).toFixed(1);
+      $('autonext').value = j.autonext ? '1' : '0';
+      $('fill').value = j.fill ? '1' : '0';
+    }).catch(function () {});
+  }
+  load();
+  setInterval(load, 4000);
+
+  $('ckgo').onclick = function () {
+    var s = $('cks');
+    s.textContent = '正在登录…';
+    post('/c/', 'a=' + encodeURIComponent($('ck1').value.trim()) +
+                '&c=' + encodeURIComponent($('ck2').value.trim()))
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        if (t === 'ok') { s.innerHTML = '<span class="ok">✔ 登录成功</span>'; load(); }
+        else { s.textContent = '失败：' + t; }
+      });
+  };
+
+  $('pgo').onclick = function () {
+    var s = $('ps');
+    s.textContent = '保存中…';
+    post('/p/', 'type=' + $('ptype').value +
+                '&host=' + encodeURIComponent($('phost').value.trim()) +
+                '&port=' + encodeURIComponent($('pport').value.trim()) +
+                '&user=' + encodeURIComponent($('puser').value) +
+                '&pass=' + encodeURIComponent($('ppass').value))
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        if (t === 'ok') { s.innerHTML = '<span class="ok">✔ 代理已保存并生效</span>'; load(); }
+        else { s.textContent = '失败：' + t; }
+      });
+  };
+
+  $('ggo').onclick = function () {
+    var s = $('gs');
+    s.textContent = '保存中…';
+    post('/g/', 'quality=' + $('quality').value +
+                '&speed=' + encodeURIComponent($('speed').value) +
+                '&autonext=' + $('autonext').value +
+                '&fill=' + $('fill').value)
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        if (t === 'ok') { s.innerHTML = '<span class="ok">✔ 播放设置已保存</span>'; }
+        else { s.textContent = '失败：' + t; }
+      });
+  };
+
+  function frame() {
+    var i = new Image();
+    i.onload = function () { $('img').src = i.src; };
+    i.src = '/f/?t=' + Date.now();
+  }
+  setInterval(frame, 1200);
+  frame();
+
+  $('img').addEventListener('click', function (e) {
+    var r = this.getBoundingClientRect();
+    post('/t/', 'x=' + ((e.clientX - r.left) / r.width).toFixed(4) +
+                '&y=' + ((e.clientY - r.top) / r.height).toFixed(4));
+  });
+  $('send').onclick = function () { post('/y/', 't=' + encodeURIComponent($('txt').value)); };
+  $('enter').onclick = function () { post('/k/', 'c=enter'); };
+  $('reload').onclick = function () { fetch('/r/'); };
+})();
+</script>
+</body>
+</html>

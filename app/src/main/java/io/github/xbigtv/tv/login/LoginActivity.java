@@ -38,6 +38,7 @@ import io.github.xbigtv.tv.BuildConfig;
 import io.github.xbigtv.tv.data.Prefs;
 import io.github.xbigtv.tv.net.NetProbe;
 import io.github.xbigtv.tv.net.Http;
+import io.github.xbigtv.tv.net.LanBridge;
 import io.github.xbigtv.tv.ui.BackGuard;
 import io.github.xbigtv.tv.ui.Icons;
 import io.github.xbigtv.tv.ui.MainActivity;
@@ -53,14 +54,14 @@ import io.github.xbigtv.tv.xapi.XSession;
  * 手机扫码登录：电视上跑 WebView 加载 x.com 官方登录页，同时开一个局域网小服务，
  * 手机扫二维码后即可看到电视画面、点按操作、并把账号密码直接填进电视的输入框。
  */
-public class LoginActivity extends Activity implements LanLinkServer.Controller {
+public class LoginActivity extends Activity implements LanBridge.Mirror {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
 
     private WebView web;
     private FrameLayout webHost;
-    private LanLinkServer server;
+    private LanBridge bridge;
     private LinearLayout qrCard;
     private ImageView qrImage;
     private TextView urlText;
@@ -477,9 +478,11 @@ public class LoginActivity extends Activity implements LanLinkServer.Controller 
     /* ---------------- 局域网桥 ---------------- */
 
     private void startLanServer() {
-        server = new LanLinkServer(this);
-        server.start();
-        String url = server.url();
+        bridge = LanBridge.get();
+        bridge.ensureStarted();
+        bridge.setMirror(this);
+        bridge.setOnLoggedIn(this::goMain);
+        String url = bridge.url();
         if (url == null) {
             urlText.setText("未检测到局域网 IP（请在电视上手动输入）");
             statusText.setText("可以按「遥控器输入」直接登录");
@@ -521,8 +524,8 @@ public class LoginActivity extends Activity implements LanLinkServer.Controller 
         finishingLogin = true;
         XSession.save(auth, ct0, twid);
         statusText.setText("✔ 登录成功，正在读取账号信息…");
-        if (server != null) {
-            server.stop();
+        if (bridge != null) {
+            bridge.clearMirror(this);
         }
         io.execute(() -> {
             String[] viewer = XApi.viewer();
@@ -549,9 +552,8 @@ public class LoginActivity extends Activity implements LanLinkServer.Controller 
         finish();
     }
 
-    /* ---------------- LanLinkServer.Controller ---------------- */
+    /* ---------------- LanBridge.Mirror ---------------- */
 
-    @Override
     public String loginWithCookie(String authIn, String ct0In, String twidIn) {
         String auth = cleanCookie(authIn, "auth_token");
         String ct0 = cleanCookie(ct0In, "ct0");
@@ -582,8 +584,8 @@ public class LoginActivity extends Activity implements LanLinkServer.Controller 
             XSession.profile(me[0], me[1], me[2]);
         }
         finishingLogin = true;
-        if (server != null) {
-            server.stop();
+        if (bridge != null) {
+            bridge.clearMirror(this);
         }
         main.post(this::goMain);
         return "ok";
@@ -743,7 +745,6 @@ public class LoginActivity extends Activity implements LanLinkServer.Controller 
         return out[0];
     }
 
-    @Override
     public boolean loggedIn() {
         return finishingLogin || XSession.loggedIn();
     }
@@ -791,8 +792,8 @@ public class LoginActivity extends Activity implements LanLinkServer.Controller 
         super.onDestroy();
         main.removeCallbacksAndMessages(null);
         io.shutdownNow();
-        if (server != null) {
-            server.stop();
+        if (bridge != null) {
+            bridge.clearMirror(this);
         }
         if (web != null) {
             web.destroy();

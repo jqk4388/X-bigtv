@@ -239,11 +239,20 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
         paneAdapter = new PostAdapter(new PostAdapter.Listener() {
             @Override
             public void onOpen(Post post) {
-                // 分屏里点视频：全屏播放
+                // 分屏里点视频：全屏播放；点图片：全屏看大图
                 if (post.hasVideo()) {
                     List<Post> feed = new ArrayList<>();
                     feed.add(post);
                     VideoFeedActivity.start(MainActivity.this, feed, 0, null, null);
+                    return;
+                }
+                java.util.List<io.github.xbigtv.tv.xapi.MediaItem> photos = post.photos();
+                if (!photos.isEmpty()) {
+                    java.util.List<String> urls = new ArrayList<>();
+                    for (io.github.xbigtv.tv.xapi.MediaItem m : photos) {
+                        urls.add(PostCardView.thumb(m, 1600));
+                    }
+                    ImageViewerActivity.start(MainActivity.this, urls, 0);
                 }
             }
 
@@ -256,9 +265,19 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
             }
 
             @Override
+            public void onExpandedChanged(Post post, boolean expanded) {
+            }
+
+            @Override
+            public void onOpenRight(Post post) {
+                onOpen(post);
+            }
+
+            @Override
             public void onNeedMore() {
             }
         });
+        paneAdapter.setAlwaysExpanded(true);   // 平行窗口里正文不折叠
         paneRv.setAdapter(paneAdapter);
         paneWrap.addView(paneRv, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -572,6 +591,17 @@ public class MainActivity extends Activity implements PostAdapter.Listener {
             return;
         }
         autoPlayer.attach(this, post, card);
+    }
+
+    @Override
+    public void onExpandedChanged(Post post, boolean expanded) {
+        // 折叠状态由 PostAdapter 记住，卡片自己更新显示
+    }
+
+    /** 方向键右：打开右侧平行窗口 */
+    @Override
+    public void onOpenRight(Post post) {
+        openPane(post.id);
     }
 
     @Override

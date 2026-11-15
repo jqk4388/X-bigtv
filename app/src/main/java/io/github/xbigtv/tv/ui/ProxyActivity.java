@@ -4,13 +4,13 @@ import android.app.Activity;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -19,20 +19,20 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import io.github.xbigtv.tv.data.Prefs;
-import io.github.xbigtv.tv.net.Http;
 import io.github.xbigtv.tv.login.QrBitmap;
-import io.github.xbigtv.tv.net.LanProxyFormServer;
-import io.github.xbigtv.tv.net.LocalProxy;
+import io.github.xbigtv.tv.net.Http;
+import io.github.xbigtv.tv.net.LanBridge;
 import io.github.xbigtv.tv.xapi.XApi;
 
 /**
- * 独立代理设置界面：只作用于本 App（接口 / 图片 / 视频 / 登录 WebView 全部走这里），
- * 不影响电视系统代理。
+ * 独立代理设置：只作用于本 App。
+ * 手机扫码打开的是同一个页面（登录/代理/播放都能设，固定 18930 端口）。
  */
 public class ProxyActivity extends Activity {
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final BackGuard backGuard = new BackGuard();
 
     private TextView stateValue;
     private TextView hostValue;
@@ -42,8 +42,7 @@ public class ProxyActivity extends Activity {
     private TextView passValue;
     private TextView enableValue;
     private TextView testResult;
-    private LanProxyFormServer formServer;
-    private android.widget.ImageView qrView;
+    private ImageView qrView;
     private TextView qrUrl;
 
     private boolean enabled;
@@ -52,59 +51,14 @@ public class ProxyActivity extends Activity {
     private int port;
     private String user;
     private String pass;
+    private int rowIndex;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         load();
         buildUi();
-        startFormServer();
-    }
-
-    /** 手机扫码填代理：电视上出二维码，手机上填完直接写回电视。 */
-    private void startFormServer() {
-        formServer = new LanProxyFormServer((type, host, portValue, user, pass) -> {
-            if (host == null || host.trim().isEmpty()) {
-                return "服务器地址不能为空";
-            }
-            if (portValue <= 0 || portValue > 65535) {
-                return "端口不合法";
-            }
-            final int ft = type;
-            final String fh = host.trim();
-            final int fp = portValue;
-            final String fu = user == null ? "" : user;
-            final String fpass = pass == null ? "" : pass;
-            main.post(() -> {
-                this.enabled = true;
-                this.type = ft;
-                this.host = fh;
-                this.port = fp;
-                this.user = fu;
-                this.pass = fpass;
-                save();
-                refreshValues();
-                Ui.toast(this, "已从手机保存代理");
-            });
-            return "ok";
-        });
-        formServer.start();
-        String url = formServer.url();
-        if (url == null) {
-            if (qrUrl != null) {
-                qrUrl.setText("未检测到局域网 IP，请手动填写");
-            }
-            return;
-        }
-        if (qrUrl != null) {
-            qrUrl.setText(url);
-        }
-        if (qrView != null) {
-            android.graphics.Bitmap qr = QrBitmap.make(url, Ui.dp(this, 150));
-            if (qr != null) {
-                qrView.setImageBitmap(qr);
-            }
-        }
+        showQr();
     }
 
     private void load() {
@@ -116,49 +70,65 @@ public class ProxyActivity extends Activity {
         pass = Prefs.proxyPass();
     }
 
+    private void showQr() {
+        LanBridge.get().ensureStarted();
+        String url = LanBridge.get().url();
+        if (url == null) {
+            qrUrl.setText("未检测到局域网 IP，请手动填写");
+            return;
+        }
+        qrUrl.setText(url);
+        android.graphics.Bitmap qr = QrBitmap.make(url, Ui.dp(this, 150));
+        if (qr != null) {
+            qrView.setImageBitmap(qr);
+        }
+    }
+
     private void buildUi() {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Ui.BLACK);
 
         LinearLayout page = Ui.linear(this, LinearLayout.VERTICAL);
-        page.setPadding(Ui.dp(this, 40), Ui.dp(this, 24), Ui.dp(this, 40), Ui.dp(this, 24));
+        page.setPadding(Ui.dp(this, 40), Ui.dp(this, 22), Ui.dp(this, 40), Ui.dp(this, 18));
 
         LinearLayout head = Ui.linear(this, LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = Ui.text(this, "代理设置", 26, Ui.TEXT, true);
-        head.addView(title);
-        TextView sub = Ui.text(this, "   仅对本 App 生效 · 接口 / 图片 / 视频 / 登录页统一走代理", 13, Ui.TEXT_DIM, false);
-        head.addView(sub);
+        head.addView(Ui.text(this, "代理设置", 26, Ui.TEXT, true));
+        head.addView(Ui.text(this, "    仅对本 App 生效 · 接口 / 图片 / 视频 / 登录页统一走代理",
+                13, Ui.TEXT_DIM, false));
         View flex = new View(this);
         head.addView(flex, Ui.lp(0, 1, 1f));
         head.addView(action("返回", v -> finish()));
         head.addView(action("保存并应用", v -> save()));
         page.addView(head);
-        page.addView(Ui.spacer(this, 14));
+        page.addView(Ui.spacer(this, 12));
 
         ScrollView scroll = new ScrollView(this);
         LinearLayout col = Ui.linear(this, LinearLayout.VERTICAL);
         scroll.addView(col);
 
+        // 扫码卡片
         LinearLayout qrCard = Ui.linear(this, LinearLayout.HORIZONTAL);
         qrCard.setGravity(Gravity.CENTER_VERTICAL);
         qrCard.setPadding(Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14));
         qrCard.setBackground(Ui.round(Ui.SURFACE, Ui.dp(this, 12)));
-        qrView = new android.widget.ImageView(this);
+        qrView = new ImageView(this);
         int qs = Ui.dp(this, 150);
         qrView.setLayoutParams(Ui.lp(qs, qs));
         qrView.setBackgroundColor(android.graphics.Color.WHITE);
         qrCard.addView(qrView);
+
         LinearLayout qrCol = Ui.linear(this, LinearLayout.VERTICAL);
         LinearLayout.LayoutParams qclp = Ui.lp(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         qclp.leftMargin = Ui.dp(this, 14);
         qrCol.setLayoutParams(qclp);
-        qrCol.addView(Ui.text(this, "手机扫码填代理（免遥控器打字）", 16, Ui.TEXT, true));
-        qrCol.addView(Ui.text(this, "手机扫这个码，在页面上填地址端口，保存后电视立刻生效", 12, Ui.TEXT_DIM, false));
+        qrCol.addView(Ui.text(this, "手机扫码：登录 / 代理 / 播放 都能设", 16, Ui.TEXT, true));
+        qrCol.addView(Ui.text(this, "同一个页面，固定地址（端口 18930），不用扫两次", 12, Ui.TEXT_DIM, false));
         qrUrl = Ui.text(this, "", 12, Ui.BLUE, true);
         qrUrl.setPadding(0, Ui.dp(this, 8), 0, 0);
         qrCol.addView(qrUrl);
         qrCard.addView(qrCol);
+
         LinearLayout.LayoutParams qcLp = Ui.lp(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         qcLp.bottomMargin = Ui.dp(this, 14);
@@ -169,7 +139,8 @@ public class ProxyActivity extends Activity {
         stateValue.setPadding(0, 0, 0, Ui.dp(this, 10));
         col.addView(stateValue);
 
-        col.addView(row("启用代理", () -> enabled ? "开" : "关", v -> {            enabled = !enabled;
+        col.addView(row("启用代理", () -> enabled ? "开" : "关", v -> {
+            enabled = !enabled;
             refreshValues();
         }));
         col.addView(row("代理类型", () -> type == Prefs.PROXY_HTTP ? "HTTP / HTTPS" : "SOCKS5", v -> {
@@ -205,34 +176,28 @@ public class ProxyActivity extends Activity {
 
         LinearLayout testRow = Ui.linear(this, LinearLayout.HORIZONTAL);
         testResult = Ui.text(this, "", 15, Ui.TEXT_DIM, false);
-        View testBtn = action("保存并测试连通性", v -> {
+        testRow.addView(action("保存并测试连通性", v -> {
             save();
             testResult.setText("正在通过代理请求 x.com…");
             io.execute(() -> {
                 String r = XApi.testConnection();
                 main.post(() -> testResult.setText("结果：" + r));
             });
-        });
-        testRow.addView(testBtn);
-        LinearLayout.LayoutParams tlp = Ui.lp(ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        tlp.leftMargin = Ui.dp(this, 14);
-        testResult.setLayoutParams(tlp);
+        }));
+        testResult.setPadding(Ui.dp(this, 14), 0, 0, 0);
         testRow.addView(testResult);
         col.addView(testRow);
 
-        col.addView(Ui.spacer(this, 16));
-
+        col.addView(Ui.spacer(this, 14));
         LinearLayout tips = Ui.linear(this, LinearLayout.VERTICAL);
         tips.setPadding(Ui.dp(this, 16), Ui.dp(this, 14), Ui.dp(this, 16), Ui.dp(this, 14));
         tips.setBackground(Ui.round(Ui.SURFACE, Ui.dp(this, 12)));
         tips.addView(Ui.text(this, "说明", 15, Ui.TEXT, true));
         String[] lines = {
-                "· 打开开关并填好地址端口后，本 App 的 GraphQL、图片、视频、登录 WebView 都会走这个代理。",
-                "· 支持 HTTP(S) 代理与 SOCKS5 代理；带账号密码的代理也支持（HTTP 用 Basic 预认证）。",
-                "· 内部会把上游代理统一收敛到 127.0.0.1 的本地转发端口，所以 WebView（只认 HTTP 代理）也能用 SOCKS5。",
-                "· 代理生效后域名解析交给代理端完成，可规避本机 DNS 污染。",
-                "· 电视系统本身的代理设置不会被修改，其它 App 不受影响。"
+                "· 打开开关并填好地址端口后，本 App 的接口、图片、视频、登录 WebView 都走这个代理。",
+                "· 支持 HTTP(S)/SOCKS5，带账号密码也行；域名交给代理端解析，可规避本机 DNS 污染。",
+                "· 电视系统本身的代理不会被修改，其它 App 不受影响。",
+                "· 手机扫码打开的就是上面那个固定地址，同一页面里还能登录账号、改播放设置。"
         };
         for (String l : lines) {
             TextView tv = Ui.text(this, l, 13, Ui.TEXT_DIM, false);
@@ -276,8 +241,6 @@ public class ProxyActivity extends Activity {
         }
     }
 
-    private int rowIndex = 0;
-
     private View row(String label, ValueSupplier value, View.OnClickListener onClick) {
         LinearLayout row = Ui.linear(this, LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -289,9 +252,7 @@ public class ProxyActivity extends Activity {
         row.setOnFocusChangeListener((v, has) -> v.setBackground(has
                 ? Ui.round(Ui.SURFACE_HI, Ui.dp(this, 12), Ui.BLUE, Math.max(2, Ui.dp(this, 2)))
                 : Ui.round(Ui.SURFACE, Ui.dp(this, 12))));
-
-        TextView name = Ui.text(this, label, 17, Ui.TEXT, false);
-        row.addView(name);
+        row.addView(Ui.text(this, label, 17, Ui.TEXT, false));
         View flex = new View(this);
         row.addView(flex, Ui.lp(0, 1, 1f));
         TextView val = Ui.text(this, value.get(), 17, Ui.BLUE, true);
@@ -354,25 +315,30 @@ public class ProxyActivity extends Activity {
         Ui.toast(this, enabled ? "代理已应用" : "已关闭代理，走直连");
     }
 
-    private final BackGuard backGuard = new BackGuard();
-
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            save();
-            finish();
+            if (backGuard.shouldExit(this)) {
+                save();
+                finish();
+            }
             return true;
         }
         return super.onKeyDown(keyCode, event);
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        // 手机上可能刚改过代理/设置，回来时刷新显示
+        load();
+        refreshValues();
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
         io.shutdownNow();
-        if (formServer != null) {
-            formServer.stop();
-        }
     }
 
     interface ValueSupplier {

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Outline;
 import android.text.TextUtils;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewOutlineProvider;
 import android.widget.FrameLayout;
@@ -26,6 +27,12 @@ public class PostCardView extends LinearLayout {
 
         /** 卡片获得焦点（用于列表内静音自动播放） */
         void onCardFocused(Post post, PostCardView card);
+
+        /** 长文折叠状态变化（OK 键） */
+        void onExpandedChanged(Post post, boolean expanded);
+
+        /** 方向键右：打开右侧平行窗口 */
+        void onOpenRight(Post post);
     }
 
     private final Context c;
@@ -33,6 +40,10 @@ public class PostCardView extends LinearLayout {
     private final Listener listener;
     private android.view.TextureView videoSurface;
     private ImageView videoThumb;
+    private TextView bodyView;
+    private TextView foldHint;
+    private boolean expanded;
+    private static final int COLLAPSED_LINES = 6;
 
     public PostCardView(Context context, Listener listener) {
         super(context);
@@ -62,13 +73,53 @@ public class PostCardView extends LinearLayout {
                     ? Ui.round(Ui.SURFACE_HI, Ui.dp(c, 14), Ui.BLUE, Math.max(2, Ui.dp(c, 2)))
                     : Ui.round(Ui.SURFACE, Ui.dp(c, 14)));
             v.animate().translationX(has ? Ui.dp(c, 4) : 0).setDuration(120).start();
+            if (has && post != null && listener != null) {
+                listener.onCardFocused(post, this);
+            }
+        });
+        // OK = 展开/收起长文；方向键右 = 打开右侧平行窗口
+        setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) {
+                return false;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                if (post != null && listener != null) {
+                    listener.onOpenRight(post);
+                    return true;
+                }
+                return false;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER
+                    || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+                if (post != null && isLongText(post.text)) {
+                    setExpanded(!expanded);
+                    if (listener != null) {
+                        listener.onExpandedChanged(post, expanded);
+                    }
+                    return true;
+                }
+                // 没有长文时 OK 仍然打开平行窗口
+                if (post != null && listener != null) {
+                    listener.onOpen(post);
+                    return true;
+                }
+            }
+            return false;
         });
     }
 
     public void bind(Post p) {
+        bind(p, false);
+    }
+
+    public void bind(Post p, boolean expandedState) {
         this.post = p;
+        this.expanded = expandedState;
         this.videoSurface = null;
         this.videoThumb = null;
+        this.bodyView = null;
+        this.foldHint = null;
         removeAllViews();
 
         if (!TextUtils.isEmpty(p.retweetedBy)) {
@@ -127,13 +178,19 @@ public class PostCardView extends LinearLayout {
 
         addView(Ui.spacer(c, 10));
 
-        // 正文
+        // 正文：长文默认折叠 6 行，保证图片/视频能露出来；OK 键展开
         if (!TextUtils.isEmpty(p.text)) {
-            TextView body = Ui.text(c, p.text, 16, Ui.TEXT, false);
-            body.setLineSpacing(Ui.dp(c, 3), 1f);
-            body.setMaxLines(9);
-            body.setEllipsize(TextUtils.TruncateAt.END);
-            addView(body);
+            bodyView = Ui.text(c, p.text, 16, Ui.TEXT, false);
+            bodyView.setLineSpacing(Ui.dp(c, 3), 1f);
+            addView(bodyView);
+            if (isLongText(p.text)) {
+                foldHint = Ui.text(c, "", 12, Ui.BLUE, true);
+                foldHint.setPadding(0, Ui.dp(c, 2), 0, 0);
+                addView(foldHint);
+                applyFold();
+            } else {
+                bodyView.setMaxLines(Integer.MAX_VALUE);
+            }
             addView(Ui.spacer(c, 6));
         }
 
@@ -309,6 +366,48 @@ public class PostCardView extends LinearLayout {
         return videoSurface;
     }
 
+    /** 是否属于需要折叠的长文（> 约 6 行）*/
+    static boolean isLongText(String text) {
+        if (text == null) {
+            return false;
+        }
+        int lineBreaks = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\n') {
+                lineBreaks++;
+            }
+        }
+        return lineBreaks >= COLLAPSED_LINES || text.length() > 260;
+    }
+
+    public boolean isExpanded() {
+        return expanded;
+    }
+
+    /** OK 键切换折叠 */
+    public void setExpanded(boolean value) {
+        this.expanded = value;
+        applyFold();
+    }
+
+    private void applyFold() {
+        if (bodyView == null) {
+            return;
+        }
+        if (expanded) {
+            bodyView.setMaxLines(Integer.MAX_VALUE);
+            bodyView.setEllipsize(null);
+            if (foldHint != null) {
+                foldHint.setText("收起（OK）");
+            }
+        } else {
+            bodyView.setMaxLines(COLLAPSED_LINES);
+            bodyView.setEllipsize(TextUtils.TruncateAt.END);
+            if (foldHint != null) {
+                foldHint.setText("… 展开全文（OK）");
+            }
+        }
+    }
     /** 自动播放开启/关闭时切换缩略图与画面 */
     public void setAutoplayActive(boolean active) {
         if (videoSurface != null) {
